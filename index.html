@@ -436,12 +436,13 @@
             const svgPoint = getSVGPoint(e.clientX, e.clientY);
             
             if (nodeId) {
-                // Clicou num nó
-                isDragging = true;
-                draggedNodeId = nodeId; // Nó principal
-                dragStartPoint = svgPoint;
-                
+                // MUDANÇA: A lógica de DRAG só acontece no modo 'view'
                 if (currentMode === 'view') {
+                    // Clicou num nó
+                    isDragging = true; // SÓ ATIVA DRAG EM VIEW
+                    draggedNodeId = nodeId; // Nó principal
+                    dragStartPoint = svgPoint;
+                
                     // Lógica de Seleção Múltipla (Apenas no modo 'view')
                     if (!e.shiftKey) {
                         if (!selectedNodeIds.has(nodeId)) {
@@ -458,23 +459,31 @@
                             selectedNodeIds.add(nodeId);
                         }
                     }
+
+                    // Armazena posições originais para o drag
+                    originalNodePositions.clear();
+                    
+                    // Define quais nós arrastar: (todos os que estão selecionados AGORA)
+                    let idsToDrag = selectedNodeIds; 
+                    
+                    for (const id of idsToDrag) {
+                        const n = nodes.find(n => n.id === id);
+                        if(n) originalNodePositions.set(id, { x: n.x, y: n.y });
+                    }
+                    
+                    svg.style.cursor = 'grabbing';
+                    render(); // Atualiza visualização da seleção
+
                 } else {
                     // Em outros modos (add-task, etc.), um clique no nó des-seleciona tudo
-                    selectedNodeIds.clear();
+                    // MAS NÃO INICIA O DRAG
+                    
+                    // MUDANÇA: Só renderiza se for necessário limpar a seleção
+                    if (selectedNodeIds.size > 0) {
+                        selectedNodeIds.clear();
+                        render();
+                    }
                 }
-
-                // Armazena posições originais para o drag
-                originalNodePositions.clear();
-                // Define quais nós arrastar: os selecionados (em view) ou apenas o clicado (outros modos)
-                let idsToDrag = (currentMode === 'view' && selectedNodeIds.size > 0) ? selectedNodeIds : new Set([nodeId]);
-                
-                for (const id of idsToDrag) {
-                    const n = nodes.find(n => n.id === id);
-                    if(n) originalNodePositions.set(id, { x: n.x, y: n.y });
-                }
-                
-                svg.style.cursor = 'grabbing';
-                if (currentMode === 'view') render(); // Atualiza visualização da seleção
 
             } else if (currentMode === 'view') {
                 // Clicou no vazio (inicia selection box), SÓ no modo 'view'
@@ -925,4 +934,6 @@
     </script>
 </body>
 </html>
+
+
 
