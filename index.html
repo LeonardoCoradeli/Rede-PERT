@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ferramenta de Rede de Tarefas (PERT/CPM)</title>
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Bibliotecas de Exportação -->
+    <!-- MUDANÇA: Removidas jspdf e svg2pdf -->
+    
+    <!-- MUDANÇA: Revertido FileSaver para o CDN original (cdnjs) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <!-- MUDANÇA: Adicionado ID para encontrar os estilos -->
+    <style id="pert-svg-styles">
+        /* Estilos customizados para o SVG */
+        body { font-family: 'Inter', sans-serif; }
+        .node {
+            transition: all 0.2s ease;
+            stroke-width: 2px;
+        }
+        .node-text {
+            font-size: 10px;
+            fill: #333;
+            pointer-events: none;
+            user-select: none;
+        }
+        .node-es-ls-text {
+            font-size: 10px;
+            font-family: monospace;
+            fill: #000;
+            pointer-events: none;
+            user-select: none;
+        }
+        .task-line {
+            stroke: #4a5568;
+            stroke-width: 2;
+            marker-end: url(#arrowhead);
+        }
+        .task-text {
+            font-size: 11px;
+            fill: #2d3748;
+            pointer-events: none;
+            user-select: none;
+            text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+        }
+        .start-node {
+            fill: #c6f6d5; /* Verde */
+            stroke: #38a169;
+        }
+        .end-node {
+            fill: #fed7d7; /* Vermelho */
+            stroke: #c53030;
+        }
+        .critical-path-node {
+            stroke: #c53030; /* Vermelho */
+            stroke-width: 4px;
+        }
+        .critical-path-task {
+            stroke: #c53030; /* Vermelho */
+            stroke-width: 3;
+            /* CORREÇÃO: A ponta da seta crítica também deve ser vermelha */
+            marker-end: url(#arrowhead-critical);
+        }
+        .node:hover {
+            transform: scale(1.1);
+            stroke: #2b6cb0;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex h-screen overflow-hidden">
+
+    <!-- Barra de Ferramentas Lateral -->
+    <div class="w-64 bg-white shadow-lg p-4 overflow-y-auto space-y-3">
+        <h1 class="text-xl font-bold text-gray-800">Rede de Tarefas</h1>
+        
+        <!-- Status Atual -->
+        <div>
+            <label class="text-xs font-semibold text-gray-500 uppercase">Modo</label>
+            <p id="status-text" class="text-blue-600 font-medium">Visualizando</p>
+        </div>
+
+        <!-- Ações de Edição -->
+        <fieldset class="border-t pt-3">
+            <legend class="text-sm font-semibold text-gray-600">Editar</legend>
+            <div class="grid grid-cols-2 gap-2 mt-2">
+                <button id="add-node-btn" class="p-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition">Evento (Nó)</button>
+                <button id="add-task-btn" class="p-2 bg-green-500 text-white rounded-lg shadow hover:bg-green-600 transition">Tarefa (Seta)</button>
+            </div>
+            <!-- BOTÕES ADICIONADOS / MOVIDOS -->
+            <div class="grid grid-cols-2 gap-2 mt-2">
+                <button id="view-mode-btn" class="p-2 bg-gray-500 text-white rounded-lg shadow hover:bg-gray-600 transition">Visualizar</button>
+                <button id="clear-btn" class="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">Limpar Tudo</button>
+            </div>
+        </fieldset>
+
+        <!-- Ações de Cálculo -->
+        <fieldset class="border-t pt-3">
+            <legend class="text-sm font-semibold text-gray-600">Calcular</legend>
+            <div class="grid grid-cols-2 gap-2 mt-2">
+                <button id="set-start-btn" class="p-2 bg-indigo-500 text-white rounded-lg shadow hover:bg-indigo-600 transition">Definir Início</button>
+                <button id="set-end-btn" class="p-2 bg-purple-500 text-white rounded-lg shadow hover:bg-purple-600 transition">Definir Fim</button>
+            </div>
+            <button id="calculate-btn" class="w-full mt-2 p-2 bg-red-500 text-white rounded-lg shadow font-bold hover:bg-red-600 transition">Calcular Caminho</button>
+        </fieldset>
+
+        <!-- Importar / Exportar -->
+        <fieldset class="border-t pt-3">
+            <legend class="text-sm font-semibold text-gray-600">Projeto</legend>
+            <div class="grid grid-cols-2 gap-2 mt-2">
+                <button id="import-json-btn" class="p-2 bg-gray-700 text-white rounded-lg shadow hover:bg-gray-800 transition">Importar JSON</button>
+                <button id="export-json-btn" class="p-2 bg-gray-700 text-white rounded-lg shadow hover:bg-gray-800 transition">Exportar JSON</button>
+                <input type="file" id="file-input" class="hidden" accept=".json">
+            </div>
+        </fieldset>
+        
+        <!-- Exportar Imagem -->
+        <fieldset class="border-t pt-3">
+        <!-- MUDANÇA: Removido botão PDF e ajustado grid -->
+        <fieldset class="border-t pt-3">
+            <legend class="text-sm font-semibold text-gray-600">Exportar Imagem</legend>
+            <div class="grid grid-cols-1 gap-2 mt-2"> <!-- Apenas 1 coluna -->
+                <button id="export-svg-btn" class="p-2 bg-teal-500 text-white rounded-lg shadow hover:bg-teal-600 transition">Exportar SVG</button>
+            </div>
+        </fieldset>
+    </div>
+
+    <!-- Área de Desenho Principal -->
+    <div class="flex-1 bg-gray-200 p-4">
+        <div class="w-full h-full bg-white rounded-lg shadow-inner overflow-hidden">
+            <svg id="diagram-svg" class="w-full h-full cursor-crosshair">
+                <defs>
+                    <!-- Definição da ponta da seta -->
+                    <marker
+                        id="arrowhead"
+                        markerWidth="10"
+                        markerHeight="7"
+                        refX="9"
+                        refY="3.5"
+                        orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#4a5568" />
+                    </marker>
+                    <marker
+                        id="arrowhead-critical"
+                        markerWidth="10"
+                        markerHeight="7"
+                        refX="9"
+                        refY="3.5"
+                        orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#c53030" />
+                    </marker>
+                </defs>
+                <!-- O conteúdo do diagrama (nós, setas) será injetado aqui pelo JS -->
+            </svg>
+        </div>
+    </div>
+
+    <!-- Modal para Adicionar Tarefa -->
+    <div id="task-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center hidden">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm">
+            <h3 class="text-lg font-bold mb-4">Adicionar Tarefa</h3>
+            <form id="task-form">
+                <div class="mb-4">
+                    <label for="task-name" class="block text-sm font-medium text-gray-700">Nome da Tarefa</label>
+                    <input type="text" id="task-name" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required>
+                </div>
+                <div class="mb-4">
+                    <label for="task-time" class="block text-sm font-medium text-gray-700">Tempo (ex: 5)</label>
+                    <input type="number" id="task-time" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" min="0" required>
+                </div>
+                <div class="flex justify-end space-x-2">
+                    <button type="button" id="cancel-task-btn" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300">Cancelar</button>
+                    <button type="submit" class="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Script Principal da Aplicação -->
+    <script type="module">
+        // --- Elementos DOM ---
+        const svg = document.getElementById('diagram-svg');
+        const statusText = document.getElementById('status-text');
+        const taskModal = document.getElementById('task-modal');
+        const taskForm = document.getElementById('task-form');
+        const taskNameInput = document.getElementById('task-name');
+        const taskTimeInput = document.getElementById('task-time');
+        const fileInput = document.getElementById('file-input');
+
+        const NODE_RADIUS = 25;
+
+        // --- Estado da Aplicação ---
+        let nodes = []; // { id, x, y, text, es (cedo), ls (tarde) }
+        let tasks = []; // { id, from, to, name, time, slack, isCritical }
+        let nextNodeId = 1;
+        let nextTaskId = 1;
+
+        let currentMode = 'view'; // 'add-node', 'add-task-start', 'add-task-end', 'set-start', 'set-end'
+        let tempTaskStartNodeId = null;
+        let startNodeId = null;
+        let endNodeId = null;
+
+        let isDragging = false;
+        let draggedNodeId = null;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+
+        // --- Funções de Renderização ---
+
+        function render() {
+            // Limpa o SVG, mas mantém as <defs>
+            while (svg.lastChild && svg.lastChild.tagName !== 'defs') {
+                svg.removeChild(svg.lastChild);
+            }
+            
+            // CORREÇÃO: Garante que as <defs> existam
+            let defs = svg.querySelector('defs');
+            if (!defs) {
+                defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                svg.prepend(defs);
+            }
+            
+            // CORREÇÃO: As definições das setas devem ser recriadas ou verificadas
+            // A sua lógica original de limpar o innerHTML estava removendo as <defs>
+            // Vamos garantir que elas estejam lá
+            if (!document.getElementById('arrowhead')) {
+                 defs.innerHTML = `
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#4a5568" />
+                    </marker>
+                    <marker id="arrowhead-critical" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#c53030" />
+                    </marker>
+                 `;
+            }
+
+            // Renderiza Tarefas (Setas) - primeiro para ficarem por baixo
+            tasks.forEach(task => {
+                const fromNode = nodes.find(n => n.id === task.from);
+                const toNode = nodes.find(n => n.id === task.to);
+                if (!fromNode || !toNode) return;
+                
+                // CORREÇÃO: Lógica para ajustar o ponto final da linha para
+                // não sobrepor o círculo, considerando o raio.
+                const dx = toNode.x - fromNode.x;
+                const dy = toNode.y - fromNode.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist === 0) return; // Evita divisão por zero
+
+                // Calcula o ponto final da linha na borda do círculo
+                const ratio = (dist - NODE_RADIUS) / dist;
+                const endX = fromNode.x + dx * ratio;
+                const endY = fromNode.y + dy * ratio;
+
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', fromNode.x);
+                line.setAttribute('y1', fromNode.y);
+                line.setAttribute('x2', endX); // Ponto final ajustado
+                line.setAttribute('y2', endY); // Ponto final ajustado
+                line.classList.add('task-line');
+                
+                if (task.isCritical) {
+                    line.classList.add('critical-path-task');
+                    // O marker-end é definido pela classe CSS
+                } else {
+                    line.setAttribute('marker-end', 'url(#arrowhead)');
+                }
+
+                svg.appendChild(line);
+
+                // Texto da Tarefa
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                const midX = (fromNode.x + toNode.x) / 2;
+                const midY = (fromNode.y + toNode.y) / 2;
+                text.setAttribute('x', midX);
+                text.setAttribute('y', midY - 5); // Posição acima da linha
+                text.classList.add('task-text');
+                text.textContent = `${task.name} (${task.time})`;
+                svg.appendChild(text);
+            });
+
+            // Renderiza Eventos (Nós)
+            nodes.forEach(node => {
+                const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                group.setAttribute('transform', `translate(${node.x}, ${node.y})`);
+                group.dataset.id = node.id;
+
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('r', NODE_RADIUS);
+                circle.classList.add('node');
+                
+                // Aplica estilos padrão que podem ser sobrescritos pelas classes
+                if (!node.isStart && !node.isEnd) {
+                     circle.style.fill = '#e2e8f0';
+                     circle.style.stroke = '#718096';
+                }
+
+                // Aplica estilos de Início/Fim/Caminho Crítico (via classes)
+                if (node.id === startNodeId) circle.classList.add('start-node');
+                if (node.id === endNodeId) circle.classList.add('end-node');
+                if (node.isCritical) circle.classList.add('critical-path-node');
+                
+                group.appendChild(circle);
+
+                // Texto do ID do Nó
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('dy', '0.3em'); // Centraliza verticalmente
+                text.classList.add('node-text');
+                text.textContent = node.text;
+                group.appendChild(text);
+
+                // Texto ES (Cedo) e LS (Tarde)
+                const eslsText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                eslsText.setAttribute('text-anchor', 'middle');
+                eslsText.setAttribute('y', -NODE_RADIUS - 5); // Acima do nó
+                eslsText.classList.add('node-es-ls-text');
+                eslsText.textContent = `[${node.es} | ${node.ls}]`;
+                group.appendChild(eslsText);
+
+                svg.appendChild(group);
+            });
+        }
+
+        // --- Funções de Lógica de UI ---
+
+        function setMode(newMode) {
+            currentMode = newMode;
+            switch (newMode) {
+                case 'view':
+                    statusText.textContent = 'Visualizando';
+                    statusText.className = 'font-medium text-gray-700';
+                    svg.style.cursor = 'grab';
+                    break;
+                case 'add-node':
+                    statusText.textContent = 'Clique para adicionar um Evento (Nó)';
+                    statusText.className = 'font-medium text-blue-600';
+                    svg.style.cursor = 'copy';
+                    break;
+                case 'add-task-start':
+                    statusText.textContent = 'Clique no nó de INÍCIO da tarefa';
+                    statusText.className = 'font-medium text-green-600';
+                    svg.style.cursor = 'pointer';
+                    break;
+                case 'add-task-end':
+                    statusText.textContent = 'Clique no nó de FIM da tarefa';
+                    statusText.className = 'font-medium text-green-600';
+                    svg.style.cursor = 'pointer';
+                    break;
+                case 'set-start':
+                    statusText.textContent = 'Clique no nó que será o INÍCIO do projeto';
+                    statusText.className = 'font-medium text-indigo-600';
+                    svg.style.cursor = 'pointer';
+                    break;
+                case 'set-end':
+                    statusText.textContent = 'Clique no nó que será o FIM do projeto';
+                    statusText.className = 'font-medium text-purple-600';
+                    svg.style.cursor = 'pointer';
+                    break;
+            }
+        }
+
+        function showTaskModal() {
+            taskModal.classList.remove('hidden');
+            taskNameInput.focus();
+        }
+
+        function hideTaskModal() {
+            taskModal.classList.add('hidden');
+            taskForm.reset();
+        }
+
+        function getClickedNodeId(target) {
+            let el = target;
+            // Sobe na árvore DOM até encontrar o grupo (g) ou o SVG
+            while (el && el.tagName !== 'svg') {
+                if (el.tagName === 'g' && el.dataset.id) {
+                    return parseInt(el.dataset.id);
+                }
+                el = el.parentElement;
+            }
+            return null;
+        }
+
+        // --- Handlers de Eventos ---
+
+        // Handlers dos Botões
+        document.getElementById('add-node-btn').addEventListener('click', () => setMode('add-node'));
+        document.getElementById('add-task-btn').addEventListener('click', () => setMode('add-task-start'));
+        document.getElementById('view-mode-btn').addEventListener('click', () => setMode('view'));
+        document.getElementById('set-start-btn').addEventListener('click', () => setMode('set-start'));
+        document.getElementById('set-end-btn').addEventListener('click', () => setMode('set-end'));
+        
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            // BUG FIX: Removido o 'confirm()' que não funciona no sandbox
+            nodes = [];
+            tasks = [];
+            startNodeId = null;
+            endNodeId = null;
+            nextNodeId = 1;
+            nextTaskId = 1;
+            setMode('view');
+            render();
+        });
+
+        document.getElementById('calculate-btn').addEventListener('click', () => {
+            if (calculatePaths()) {
+                render();
+            }
+        });
+
+        // Handlers do SVG (Mouse)
+        svg.addEventListener('mousedown', (e) => {
+            const nodeId = getClickedNodeId(e.target);
+            if (currentMode === 'view' && nodeId) { // Só arrasta no modo 'view'
+                isDragging = true;
+                draggedNodeId = nodeId;
+                const node = nodes.find(n => n.id === nodeId);
+                const svgPoint = getSVGPoint(e.clientX, e.clientY);
+                dragOffsetX = svgPoint.x - node.x;
+                dragOffsetY = svgPoint.y - node.y;
+                svg.style.cursor = 'grabbing';
+            }
+        });
+        
+        svg.addEventListener('mousemove', (e) => {
+            if (isDragging && draggedNodeId) {
+                const node = nodes.find(n => n.id === draggedNodeId);
+                if (node) {
+                    const svgPoint = getSVGPoint(e.clientX, e.clientY);
+                    node.x = svgPoint.x - dragOffsetX;
+                    node.y = svgPoint.y - dragOffsetY;
+                    render();
+                }
+            }
+        });
+        
+        svg.addEventListener('mouseup', (e) => {
+            if (isDragging) {
+                isDragging = false;
+                draggedNodeId = null;
+                setMode('view'); // Reseta o cursor para 'grab'
+            }
+        });
+
+        svg.addEventListener('click', (e) => {
+            // Se estava arrastando, o 'click' é ignorado (prevenção)
+            if (isDragging) return;
+
+            const svgPoint = getSVGPoint(e.clientX, e.clientY);
+            const clickedNodeId = getClickedNodeId(e.target);
+
+            switch (currentMode) {
+                case 'add-node':
+                    if (clickedNodeId) return; // Não adiciona nó em cima de outro
+                    nodes.push({
+                        id: nextNodeId,
+                        x: svgPoint.x,
+                        y: svgPoint.y,
+                        text: `E${nextNodeId}`,
+                        es: 0,
+                        ls: 0,
+                        isCritical: false,
+                    });
+                    nextNodeId++;
+                    render();
+                    break;
+                
+                case 'add-task-start':
+                    if (clickedNodeId) {
+                        tempTaskStartNodeId = clickedNodeId;
+                        setMode('add-task-end');
+                    }
+                    break;
+
+                case 'add-task-end':
+                    if (clickedNodeId && clickedNodeId !== tempTaskStartNodeId) {
+                        // Salva o nó de destino e mostra o modal
+                        taskForm.dataset.from = tempTaskStartNodeId;
+                        taskForm.dataset.to = clickedNodeId;
+                        showTaskModal();
+                    } else {
+                        // Cancelou a seleção do nó final
+                        setMode('add-task-start');
+                    }
+                    // tempTaskStartNodeId é resetado no submit ou cancel do modal
+                    break;
+                
+                case 'set-start':
+                    if (clickedNodeId) {
+                        startNodeId = clickedNodeId;
+                        setMode('view');
+                        render();
+                    } else {
+                        setMode('view');
+                    }
+                    break;
+
+                case 'set-end':
+                    if (clickedNodeId) {
+                        endNodeId = clickedNodeId;
+                        setMode('view');
+                        render();
+                    } else {
+                        setMode('view');
+                    }
+                    break;
+            }
+        });
+
+        // Handlers do Modal
+        taskForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const from = parseInt(taskForm.dataset.from);
+            const to = parseInt(taskForm.dataset.to);
+            const name = taskNameInput.value;
+            const time = parseFloat(taskTimeInput.value);
+
+            if (from && to && name && time >= 0) {
+                tasks.push({
+                    id: nextTaskId++,
+                    from: from,
+                    to: to,
+                    name: name,
+                    time: time,
+                    slack: 0,
+                    isCritical: false
+                });
+                hideTaskModal();
+                setMode('add-task-start'); // Continua adicionando tarefas
+                tempTaskStartNodeId = null;
+                render();
+            }
+        });
+
+        document.getElementById('cancel-task-btn').addEventListener('click', () => {
+            hideTaskModal();
+            setMode('add-task-start'); // Volta para seleção de início
+            tempTaskStartNodeId = null;
+        });
+        
+        function getSVGPoint(clientX, clientY) {
+            const pt = svg.createSVGPoint();
+            pt.x = clientX;
+            pt.y = clientY;
+            return pt.matrixTransform(svg.getScreenCTM().inverse());
+        }
+
+        // --- Lógica de Cálculo (CPM) ---
+        // (Sua lógica de 'calculatePaths' está correta e foi mantida)
+        function calculatePaths() {
+            if (!startNodeId || !endNodeId) {
+                console.error("Por favor, defina um nó de INÍCIO e um nó de FIM antes de calcular.");
+                return false;
+            }
+
+            // Reseta os cálculos
+            nodes.forEach(n => {
+                n.es = 0;
+                n.ls = Infinity; // Inicia LS como infinito (exceto para o fim)
+                n.isCritical = false;
+            });
+            tasks.forEach(t => t.isCritical = false);
+
+            const startNode = nodes.find(n => n.id === startNodeId);
+            const endNode = nodes.find(n => n.id === endNodeId);
+            
+            // --- 1. Forward Pass (Cálculo do Tempo Cedo - ES) ---
+            let nodePredecessors = {}; 
+            nodes.forEach(n => {
+                nodePredecessors[n.id] = tasks.filter(t => t.to === n.id).length;
+            });
+            
+            let processQueue = [startNode];
+            startNode.es = 0;
+            let visitedCount = 0;
+            
+            // Preenche os 'ls' com 0 para nós que não são o fim, para o cálculo
+            nodes.forEach(n => { if (n.id !== startNodeId) n.es = 0; });
+
+            while(processQueue.length > 0) {
+                processQueue.sort((a,b) => a.es - b.es); // Processa nós com menor ES primeiro
+                const u = processQueue.shift();
+                visitedCount++;
+                
+                const outgoingTasks = tasks.filter(t => t.from === u.id);
+                
+                for(const task of outgoingTasks) {
+                    const v = nodes.find(n => n.id === task.to);
+                    if (!v) continue;
+                    
+                    const newES = u.es + task.time;
+                    
+                    if (newES > v.es) {
+                        v.es = newES;
+                    }
+                    
+                    nodePredecessors[v.id]--;
+                    if(nodePredecessors[v.id] === 0 && !processQueue.includes(v)) {
+                        processQueue.push(v);
+                    }
+                }
+            }
+
+            if (visitedCount < nodes.length) {
+                 console.warn("Aviso: Alguns nós podem não ser alcançáveis a partir do nó de início.");
+                 // Pode ser um grafo desconectado, mas não necessariamente um ciclo
+            }
+            // Verificação de ciclo (se um nó ainda tem predecessores não resolvidos)
+            if(Object.values(nodePredecessors).some(count => count > 0)) {
+                 console.error("Erro: Ciclo detectado no grafo. Não é possível calcular o caminho.");
+                 return false;
+            }
+
+
+            // --- 2. Backward Pass (Cálculo do Tempo Tarde - LS) ---
+            const projectDuration = endNode.es;
+            endNode.ls = projectDuration;
+            
+            // Preenche os 'ls' com Infinito para nós que não são o fim
+            nodes.forEach(n => { if (n.id !== endNodeId) n.ls = Infinity; });
+            
+            let nodeSuccessors = {};
+            nodes.forEach(n => {
+                nodeSuccessors[n.id] = tasks.filter(t => t.from === n.id).length;
+            });
+
+            processQueue = [endNode];
+            
+            while(processQueue.length > 0) {
+                processQueue.sort((a,b) => b.ls - a.ls); // Processa nós com maior LS primeiro
+                const v = processQueue.shift();
+                
+                const incomingTasks = tasks.filter(t => t.to === v.id);
+                
+                for(const task of incomingTasks) {
+                    const u = nodes.find(n => n.id === task.from);
+                    if (!u) continue;
+                    
+                    const newLS = v.ls - task.time;
+                    
+                    if (newLS < u.ls) {
+                        u.ls = newLS;
+                    }
+                    
+                    nodeSuccessors[u.id]--;
+                    if(nodeSuccessors[u.id] === 0 && !processQueue.includes(u)) {
+                        processQueue.push(u);
+                    }
+                }
+            }
+            
+            // --- 3. Calcular Folga (Slack) e Caminho Crítico ---
+            const tolerance = 1e-5; // Tolerância para comparação de floats
+            
+            nodes.forEach(n => {
+                // Se 'ls' nunca foi atualizado (nó inalcançável no backward pass),
+                // define para o tempo do projeto para evitar Infinito
+                if (n.ls === Infinity) {
+                    n.ls = projectDuration;
+                }
+                
+                const slack = n.ls - n.es;
+                if (Math.abs(slack) < tolerance) {
+                    n.isCritical = true;
+                }
+            });
+            
+            tasks.forEach(task => {
+                const fromNode = nodes.find(n => n.id === task.from);
+                const toNode = nodes.find(n => n.id === task.to);
+                // Folga da tarefa = LS(fim) - ES(início) - Duração
+                const slack = toNode.ls - fromNode.es - task.time;
+                task.slack = slack;
+                
+                if (Math.abs(slack) < tolerance && fromNode.isCritical && toNode.isCritical) {
+                    task.isCritical = true;
+                }
+            });
+            
+            return true;
+        }
+
+
+        // --- Funções de Import/Export ---
+
+        // JSON
+        document.getElementById('export-json-btn').addEventListener('click', () => {
+            const data = {
+                nodes,
+                tasks,
+                nextNodeId,
+                nextTaskId,
+                startNodeId,
+                endNodeId
+            };
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            saveAs(blob, 'projeto-rede-tarefas.json');
+        });
+
+        document.getElementById('import-json-btn').addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    nodes = data.nodes || [];
+                    tasks = data.tasks || [];
+                    nextNodeId = data.nextNodeId || 1;
+                    nextTaskId = data.nextTaskId || 1;
+                    startNodeId = data.startNodeId || null;
+                    endNodeId = data.endNodeId || null;
+                    render();
+                    setMode('view');
+                } catch (err) {
+                    console.error("Erro ao ler o arquivo JSON: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+            fileInput.value = null; // Reseta o input
+        });
+
+        function getClonedSvgWithStyles() {
+            const svg = document.getElementById('diagram-svg');
+            const styleSheet = document.getElementById('pert-svg-styles').sheet;
+            
+            let cssText = "";
+            if (styleSheet) {
+                try {
+                    for (const rule of styleSheet.cssRules) {
+                        // Exclui regras de 'body' ou ':hover' que não se aplicam a exportações estáticas
+                        if (rule.selectorText && !rule.selectorText.includes('body') && !rule.selectorText.includes(':hover')) {
+                            cssText += rule.cssText + "\n";
+                        }
+                    }
+                } catch (e) {
+                     console.error("Não foi possível ler as regras de CSS (talvez por CORS, se estivessem em outro domínio):", e);
+                     // Fallback: tenta usar innerHTML (menos ideal)
+                     cssText = document.getElementById('pert-svg-styles').innerHTML;
+                }
+            }
+
+            const clonedSvg = svg.cloneNode(true);
+            
+            // Cria um elemento <style> para o SVG
+            const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+            styleEl.textContent = cssText;
+
+            let defs = clonedSvg.querySelector('defs');
+            if (!defs) {
+                defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                clonedSvg.prepend(defs);
+            }
+            
+            // Adiciona os estilos coletados às <defs> do clone
+            defs.appendChild(styleEl);
+
+            // CORREÇÃO: Define atributos de fonte explícitos nos textos
+            // para garantir que renderizem corretamente em PNG/PDF
+            clonedSvg.querySelectorAll('.node-text, .node-es-ls-text, .task-text').forEach(textEl => {
+                if (!textEl.style.fontFamily) {
+                    if (textEl.classList.contains('node-es-ls-text')) {
+                         textEl.style.fontFamily = 'monospace';
+                    } else {
+                         textEl.style.fontFamily = 'Inter, sans-serif';
+                    }
+                }
+                 if (textEl.classList.contains('task-text')) {
+                     textEl.style.paintOrder = 'stroke';
+                     textEl.style.stroke = '#fff';
+                     textEl.style.strokeWidth = '3px';
+                     textEl.style.strokeLinecap = 'butt';
+                     textEl.style.strokeLinejoin = 'miter';
+                 }
+            });
+            return clonedSvg;
+        }
+
+        document.getElementById('export-svg-btn').addEventListener('click', () => {
+            if (typeof saveAs === 'undefined') {
+                console.error("Erro: Biblioteca FileSaver.js não carregada.");
+                return;
+            }
+            const clonedSvg = getClonedSvgWithStyles();
+            const svgData = new XMLSerializer().serializeToString(clonedSvg);
+            const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+            saveAs(blob, 'diagrama-rede.svg');
+            setMode('view');
+        });
+    </script>
+</body>
+</html>
