@@ -8,18 +8,21 @@
     <script src="https://cdn.tailwindcss.com"></script>
     
     <!-- 2. Bibliotecas de Exportação -->
-    <!-- MUDANÇA: Removidas jspdf e svg2pdf -->
-    
-    <!-- MUDANÇA: Revertido FileSaver para o CDN original (cdnjs) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
-    <!-- MUDANÇA: Adicionado ID para encontrar os estilos -->
     <style id="pert-svg-styles">
         /* Estilos customizados para o SVG */
         body { font-family: 'Inter', sans-serif; }
         .node {
             transition: all 0.2s ease;
             stroke-width: 2px;
+            /* Cor padrão movida para o render() para permitir seleção */
+        }
+        /* MUDANÇA: Estilo para nós selecionados */
+        .node.selected {
+            fill: #ebf8ff; /* Azul claro */
+            stroke: #2b6cb0; /* Azul escuro */
+            stroke-width: 3px;
         }
         .node-text {
             font-size: 10px;
@@ -44,7 +47,7 @@
             fill: #2d3748;
             pointer-events: none;
             user-select: none;
-            text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+            text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff; /* Sombra mais forte */
         }
         .start-node {
             fill: #c6f6d5; /* Verde */
@@ -61,12 +64,10 @@
         .critical-path-task {
             stroke: #c53030; /* Vermelho */
             stroke-width: 3;
-            /* CORREÇÃO: A ponta da seta crítica também deve ser vermelha */
-            marker-end: url(#arrowhead-critical);
         }
         .node:hover {
             transform: scale(1.1);
-            stroke: #2b6cb0;
+            /* A cor de hover agora é gerenciada pela seleção */
         }
     </style>
 </head>
@@ -89,7 +90,6 @@
                 <button id="add-node-btn" class="p-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition">Evento (Nó)</button>
                 <button id="add-task-btn" class="p-2 bg-green-500 text-white rounded-lg shadow hover:bg-green-600 transition">Tarefa (Seta)</button>
             </div>
-            <!-- BOTÕES ADICIONADOS / MOVIDOS -->
             <div class="grid grid-cols-2 gap-2 mt-2">
                 <button id="view-mode-btn" class="p-2 bg-gray-500 text-white rounded-lg shadow hover:bg-gray-600 transition">Visualizar</button>
                 <button id="clear-btn" class="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">Limpar Tudo</button>
@@ -118,10 +118,8 @@
         
         <!-- Exportar Imagem -->
         <fieldset class="border-t pt-3">
-        <!-- MUDANÇA: Removido botão PDF e ajustado grid -->
-        <fieldset class="border-t pt-3">
             <legend class="text-sm font-semibold text-gray-600">Exportar Imagem</legend>
-            <div class="grid grid-cols-1 gap-2 mt-2"> <!-- Apenas 1 coluna -->
+            <div class="grid grid-cols-1 gap-2 mt-2">
                 <button id="export-svg-btn" class="p-2 bg-teal-500 text-white rounded-lg shadow hover:bg-teal-600 transition">Exportar SVG</button>
             </div>
         </fieldset>
@@ -204,8 +202,17 @@
 
         let isDragging = false;
         let draggedNodeId = null;
-        let dragOffsetX = 0;
-        let dragOffsetY = 0;
+        
+        // MUDANÇA: Variáveis para seleção múltipla
+        let selectedNodeIds = new Set();
+        let isSelecting = false; // Desenhando caixa de seleção
+        let selectionBoxStart = { x: 0, y: 0 };
+        let selectionBoxElement = null;
+        
+        let dragStartPoint = { x: 0, y: 0 };
+        let originalNodePositions = new Map();
+        let didDrag = false; // Para diferenciar 'drag' de 'click'
+
 
         // --- Funções de Renderização ---
 
@@ -214,56 +221,33 @@
             while (svg.lastChild && svg.lastChild.tagName !== 'defs') {
                 svg.removeChild(svg.lastChild);
             }
-            
-            // CORREÇÃO: Garante que as <defs> existam
-            let defs = svg.querySelector('defs');
-            if (!defs) {
-                defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-                svg.prepend(defs);
-            }
-            
-            // CORREÇÃO: As definições das setas devem ser recriadas ou verificadas
-            // A sua lógica original de limpar o innerHTML estava removendo as <defs>
-            // Vamos garantir que elas estejam lá
-            if (!document.getElementById('arrowhead')) {
-                 defs.innerHTML = `
-                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                        <polygon points="0 0, 10 3.5, 0 7" fill="#4a5568" />
-                    </marker>
-                    <marker id="arrowhead-critical" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                        <polygon points="0 0, 10 3.5, 0 7" fill="#c53030" />
-                    </marker>
-                 `;
-            }
 
             // Renderiza Tarefas (Setas) - primeiro para ficarem por baixo
             tasks.forEach(task => {
                 const fromNode = nodes.find(n => n.id === task.from);
                 const toNode = nodes.find(n => n.id === task.to);
                 if (!fromNode || !toNode) return;
-                
-                // CORREÇÃO: Lógica para ajustar o ponto final da linha para
-                // não sobrepor o círculo, considerando o raio.
+
+                // MUDANÇA: Ajuste para a linha parar na borda do círculo
                 const dx = toNode.x - fromNode.x;
                 const dy = toNode.y - fromNode.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
+                const dist = Math.sqrt(dx*dx + dy*dy);
                 if (dist === 0) return; // Evita divisão por zero
 
-                // Calcula o ponto final da linha na borda do círculo
                 const ratio = (dist - NODE_RADIUS) / dist;
-                const endX = fromNode.x + dx * ratio;
-                const endY = fromNode.y + dy * ratio;
+                const targetX = fromNode.x + dx * ratio;
+                const targetY = fromNode.y + dy * ratio;
 
                 const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
                 line.setAttribute('x1', fromNode.x);
                 line.setAttribute('y1', fromNode.y);
-                line.setAttribute('x2', endX); // Ponto final ajustado
-                line.setAttribute('y2', endY); // Ponto final ajustado
+                line.setAttribute('x2', targetX); // MUDANÇA
+                line.setAttribute('y2', targetY); // MUDANÇA
                 line.classList.add('task-line');
                 
                 if (task.isCritical) {
                     line.classList.add('critical-path-task');
-                    // O marker-end é definido pela classe CSS
+                    line.setAttribute('marker-end', 'url(#arrowhead-critical)');
                 } else {
                     line.setAttribute('marker-end', 'url(#arrowhead)');
                 }
@@ -275,7 +259,10 @@
                 const midX = (fromNode.x + toNode.x) / 2;
                 const midY = (fromNode.y + toNode.y) / 2;
                 text.setAttribute('x', midX);
-                text.setAttribute('y', midY - 5); // Posição acima da linha
+                // MUDANÇA: Alinhamento central
+                text.setAttribute('y', midY);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('dy', '0.3em'); // Ajuste vertical
                 text.classList.add('task-text');
                 text.textContent = `${task.name} (${task.time})`;
                 svg.appendChild(text);
@@ -291,17 +278,21 @@
                 circle.setAttribute('r', NODE_RADIUS);
                 circle.classList.add('node');
                 
-                // Aplica estilos padrão que podem ser sobrescritos pelas classes
-                if (!node.isStart && !node.isEnd) {
-                     circle.style.fill = '#e2e8f0';
-                     circle.style.stroke = '#718096';
-                }
-
-                // Aplica estilos de Início/Fim/Caminho Crítico (via classes)
+                // MUDANÇA: Lógica de classes para estilo
+                circle.style.fill = ''; // Reseta estilos inline
+                circle.style.stroke = '';
+                
                 if (node.id === startNodeId) circle.classList.add('start-node');
                 if (node.id === endNodeId) circle.classList.add('end-node');
                 if (node.isCritical) circle.classList.add('critical-path-node');
+                if (selectedNodeIds.has(node.id)) circle.classList.add('selected');
                 
+                // Aplica cor padrão se nenhuma classe de cor especial se aplicar
+                if (node.id !== startNodeId && node.id !== endNodeId && !selectedNodeIds.has(node.id)) {
+                    circle.style.fill = '#e2e8f0';
+                    circle.style.stroke = '#718096';
+                }
+
                 group.appendChild(circle);
 
                 // Texto do ID do Nó
@@ -317,7 +308,7 @@
                 eslsText.setAttribute('text-anchor', 'middle');
                 eslsText.setAttribute('y', -NODE_RADIUS - 5); // Acima do nó
                 eslsText.classList.add('node-es-ls-text');
-                eslsText.textContent = `[${node.es} | ${node.ls}]`;
+                eslsText.textContent = `[${node.es | 0} | ${node.ls === Infinity ? 'Inf' : (node.ls | 0)}]`;
                 group.appendChild(eslsText);
 
                 svg.appendChild(group);
@@ -328,9 +319,15 @@
 
         function setMode(newMode) {
             currentMode = newMode;
+            // MUDANÇA: Desseleciona tudo ao trocar de modo
+            if (newMode !== 'view') {
+                selectedNodeIds.clear();
+                render();
+            }
+            
             switch (newMode) {
                 case 'view':
-                    statusText.textContent = 'Visualizando';
+                    statusText.textContent = 'Visualizando (Shift+Click para selecionar)';
                     statusText.className = 'font-medium text-gray-700';
                     svg.style.cursor = 'grab';
                     break;
@@ -374,14 +371,31 @@
 
         function getClickedNodeId(target) {
             let el = target;
-            // Sobe na árvore DOM até encontrar o grupo (g) ou o SVG
-            while (el && el.tagName !== 'svg') {
+            while (el && el !== svg) {
                 if (el.tagName === 'g' && el.dataset.id) {
                     return parseInt(el.dataset.id);
+                }
+                // Se clicou no círculo ou texto dentro do 'g'
+                if ((el.tagName === 'circle' || el.tagName === 'text') && el.parentElement.tagName === 'g' && el.parentElement.dataset.id) {
+                    return parseInt(el.parentElement.dataset.id);
                 }
                 el = el.parentElement;
             }
             return null;
+        }
+
+        // MUDANÇA: Função para excluir nó
+        function deleteNode(nodeId) {
+            nodes = nodes.filter(n => n.id !== nodeId);
+            // Deleta tarefas conectadas
+            tasks = tasks.filter(t => t.from !== nodeId && t.to !== nodeId);
+            
+            if (startNodeId === nodeId) startNodeId = null;
+            if (endNodeId === nodeId) endNodeId = null;
+            selectedNodeIds.delete(nodeId);
+            
+            console.log(`Nó ${nodeId} excluído.`);
+            render();
         }
 
         // --- Handlers de Eventos ---
@@ -394,13 +408,13 @@
         document.getElementById('set-end-btn').addEventListener('click', () => setMode('set-end'));
         
         document.getElementById('clear-btn').addEventListener('click', () => {
-            // BUG FIX: Removido o 'confirm()' que não funciona no sandbox
             nodes = [];
             tasks = [];
             startNodeId = null;
             endNodeId = null;
             nextNodeId = 1;
             nextTaskId = 1;
+            selectedNodeIds.clear();
             setMode('view');
             render();
         });
@@ -411,29 +425,106 @@
             }
         });
 
-        // Handlers do SVG (Mouse)
+        // MUDANÇA: Handlers do SVG (Mouse) - Lógica de Drag/Seleção
+        
         svg.addEventListener('mousedown', (e) => {
+            // Ignora botões que não são o principal (ex: direito, do meio)
+            if (e.button !== 0) return; 
+
+            didDrag = false; // Reseta o flag de 'drag'
             const nodeId = getClickedNodeId(e.target);
-            if (currentMode === 'view' && nodeId) { // Só arrasta no modo 'view'
+            const svgPoint = getSVGPoint(e.clientX, e.clientY);
+            
+            if (nodeId) {
+                // Clicou num nó
                 isDragging = true;
-                draggedNodeId = nodeId;
-                const node = nodes.find(n => n.id === nodeId);
-                const svgPoint = getSVGPoint(e.clientX, e.clientY);
-                dragOffsetX = svgPoint.x - node.x;
-                dragOffsetY = svgPoint.y - node.y;
+                draggedNodeId = nodeId; // Nó principal
+                dragStartPoint = svgPoint;
+                
+                if (currentMode === 'view') {
+                    // Lógica de Seleção Múltipla (Apenas no modo 'view')
+                    if (!e.shiftKey) {
+                        if (!selectedNodeIds.has(nodeId)) {
+                            // Se clicar em um nó não selecionado (sem shift), limpa seleção e seleciona este
+                            selectedNodeIds.clear();
+                            selectedNodeIds.add(nodeId);
+                        }
+                        // Se clicou em nó já selecionado, não faz nada (prepara para arrastar o grupo)
+                    } else {
+                        // Com Shift, alterna a seleção
+                        if (selectedNodeIds.has(nodeId)) {
+                            selectedNodeIds.delete(nodeId);
+                        } else {
+                            selectedNodeIds.add(nodeId);
+                        }
+                    }
+                } else {
+                    // Em outros modos (add-task, etc.), um clique no nó des-seleciona tudo
+                    selectedNodeIds.clear();
+                }
+
+                // Armazena posições originais para o drag
+                originalNodePositions.clear();
+                // Define quais nós arrastar: os selecionados (em view) ou apenas o clicado (outros modos)
+                let idsToDrag = (currentMode === 'view' && selectedNodeIds.size > 0) ? selectedNodeIds : new Set([nodeId]);
+                
+                for (const id of idsToDrag) {
+                    const n = nodes.find(n => n.id === id);
+                    if(n) originalNodePositions.set(id, { x: n.x, y: n.y });
+                }
+                
                 svg.style.cursor = 'grabbing';
+                if (currentMode === 'view') render(); // Atualiza visualização da seleção
+
+            } else if (currentMode === 'view') {
+                // Clicou no vazio (inicia selection box), SÓ no modo 'view'
+                isSelecting = true;
+                selectionBoxStart = svgPoint;
+                selectionBoxElement = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                selectionBoxElement.setAttribute('x', svgPoint.x);
+                selectionBoxElement.setAttribute('y', svgPoint.y);
+                selectionBoxElement.setAttribute('width', 0);
+                selectionBoxElement.setAttribute('height', 0);
+                selectionBoxElement.style.fill = 'rgba(43, 108, 176, 0.2)';
+                selectionBoxElement.style.stroke = '#2b6cb0';
+                selectionBoxElement.style.strokeWidth = '1px';
+                svg.appendChild(selectionBoxElement);
+                
+                if (!e.shiftKey) {
+                    selectedNodeIds.clear();
+                    render();
+                }
             }
+            // Se clicou no vazio e não está em 'view' mode, o 'click' handler vai cuidar (ex: 'add-node')
         });
         
         svg.addEventListener('mousemove', (e) => {
-            if (isDragging && draggedNodeId) {
-                const node = nodes.find(n => n.id === draggedNodeId);
-                if (node) {
-                    const svgPoint = getSVGPoint(e.clientX, e.clientY);
-                    node.x = svgPoint.x - dragOffsetX;
-                    node.y = svgPoint.y - dragOffsetY;
-                    render();
+            if (isDragging) {
+                didDrag = true; // Marcou que um 'drag' ocorreu
+                const svgPoint = getSVGPoint(e.clientX, e.clientY);
+                const dx = svgPoint.x - dragStartPoint.x;
+                const dy = svgPoint.y - dragStartPoint.y;
+                
+                // Move todos os nós que estavam selecionados no mousedown
+                for (const [id, originalPos] of originalNodePositions.entries()) {
+                    const node = nodes.find(n => n.id === id);
+                    if (node) {
+                        node.x = originalPos.x + dx;
+                        node.y = originalPos.y + dy;
+                    }
                 }
+                render();
+            } else if (isSelecting) {
+                didDrag = true; // Desenhar um box também conta como 'drag'
+                const svgPoint = getSVGPoint(e.clientX, e.clientY);
+                const x = Math.min(selectionBoxStart.x, svgPoint.x);
+                const y = Math.min(selectionBoxStart.y, svgPoint.y);
+                const width = Math.abs(selectionBoxStart.x - svgPoint.x);
+                const height = Math.abs(selectionBoxStart.y - svgPoint.y);
+                selectionBoxElement.setAttribute('x', x);
+                selectionBoxElement.setAttribute('y', y);
+                selectionBoxElement.setAttribute('width', width);
+                selectionBoxElement.setAttribute('height', height);
             }
         });
         
@@ -441,20 +532,51 @@
             if (isDragging) {
                 isDragging = false;
                 draggedNodeId = null;
-                setMode('view'); // Reseta o cursor para 'grab'
+                originalNodePositions.clear();
+                setMode(currentMode); // Reseta o cursor (ex: de 'grabbing' para 'grab')
+            } else if (isSelecting) {
+                isSelecting = false;
+                // Finaliza a seleção do box
+                const x = parseFloat(selectionBoxElement.getAttribute('x'));
+                const y = parseFloat(selectionBoxElement.getAttribute('y'));
+                const width = parseFloat(selectionBoxElement.getAttribute('width'));
+                const height = parseFloat(selectionBoxElement.getAttribute('height'));
+                
+                nodes.forEach(node => {
+                    // Seleciona se o CENTRO do nó está no box
+                    if (node.x > x && node.x < (x + width) && node.y > y && node.y < (y + height)) {
+                        selectedNodeIds.add(node.id);
+                    }
+                });
+                
+                selectionBoxElement.remove();
+                selectionBoxElement = null;
+                render(); // Mostra a nova seleção
+            }
+        });
+
+        // MUDANÇA: Adicionado listener de clique direito
+        svg.addEventListener('contextmenu', (e) => {
+            e.preventDefault(); // Impede o menu do navegador
+            const nodeId = getClickedNodeId(e.target);
+            if (nodeId) {
+                deleteNode(nodeId);
             }
         });
 
         svg.addEventListener('click', (e) => {
-            // Se estava arrastando, o 'click' é ignorado (prevenção)
-            if (isDragging) return;
+            // MUDANÇA: Ignora 'click' se um 'drag' acabou de acontecer
+            if (didDrag) {
+                didDrag = false; 
+                return;
+            }
 
             const svgPoint = getSVGPoint(e.clientX, e.clientY);
             const clickedNodeId = getClickedNodeId(e.target);
 
             switch (currentMode) {
                 case 'add-node':
-                    if (clickedNodeId) return; // Não adiciona nó em cima de outro
+                    if (clickedNodeId) return; 
                     nodes.push({
                         id: nextNodeId,
                         x: svgPoint.x,
@@ -477,15 +599,13 @@
 
                 case 'add-task-end':
                     if (clickedNodeId && clickedNodeId !== tempTaskStartNodeId) {
-                        // Salva o nó de destino e mostra o modal
                         taskForm.dataset.from = tempTaskStartNodeId;
                         taskForm.dataset.to = clickedNodeId;
                         showTaskModal();
                     } else {
-                        // Cancelou a seleção do nó final
                         setMode('add-task-start');
                     }
-                    // tempTaskStartNodeId é resetado no submit ou cancel do modal
+                    tempTaskStartNodeId = null;
                     break;
                 
                 case 'set-start':
@@ -505,6 +625,14 @@
                         render();
                     } else {
                         setMode('view');
+                    }
+                    break;
+                
+                case 'view':
+                    // MUDANÇA: Clicar no vazio no modo 'view' agora des-seleciona tudo
+                    if (!clickedNodeId && !e.shiftKey) {
+                        selectedNodeIds.clear();
+                        render();
                     }
                     break;
             }
@@ -529,16 +657,14 @@
                     isCritical: false
                 });
                 hideTaskModal();
-                setMode('add-task-start'); // Continua adicionando tarefas
-                tempTaskStartNodeId = null;
+                setMode('add-task-start');
                 render();
             }
         });
 
         document.getElementById('cancel-task-btn').addEventListener('click', () => {
             hideTaskModal();
-            setMode('add-task-start'); // Volta para seleção de início
-            tempTaskStartNodeId = null;
+            setMode('add-task-start');
         });
         
         function getSVGPoint(clientX, clientY) {
@@ -549,7 +675,7 @@
         }
 
         // --- Lógica de Cálculo (CPM) ---
-        // (Sua lógica de 'calculatePaths' está correta e foi mantida)
+
         function calculatePaths() {
             if (!startNodeId || !endNodeId) {
                 console.error("Por favor, defina um nó de INÍCIO e um nó de FIM antes de calcular.");
@@ -574,14 +700,9 @@
             });
             
             let processQueue = [startNode];
-            startNode.es = 0;
             let visitedCount = 0;
-            
-            // Preenche os 'ls' com 0 para nós que não são o fim, para o cálculo
-            nodes.forEach(n => { if (n.id !== startNodeId) n.es = 0; });
 
             while(processQueue.length > 0) {
-                processQueue.sort((a,b) => a.es - b.es); // Processa nós com menor ES primeiro
                 const u = processQueue.shift();
                 visitedCount++;
                 
@@ -589,7 +710,7 @@
                 
                 for(const task of outgoingTasks) {
                     const v = nodes.find(n => n.id === task.to);
-                    if (!v) continue;
+                    if (!v) continue; // Nó de destino pode ter sido excluído
                     
                     const newES = u.es + task.time;
                     
@@ -598,39 +719,42 @@
                     }
                     
                     nodePredecessors[v.id]--;
-                    if(nodePredecessors[v.id] === 0 && !processQueue.includes(v)) {
+                    if(nodePredecessors[v.id] === 0) {
                         processQueue.push(v);
                     }
                 }
             }
 
             if (visitedCount < nodes.length) {
-                 console.warn("Aviso: Alguns nós podem não ser alcançáveis a partir do nó de início.");
-                 // Pode ser um grafo desconectado, mas não necessariamente um ciclo
+                // Tenta encontrar nós não visitados (exclui nós desconectados do início)
+                const unvisitedNodes = nodes.filter(n => nodePredecessors[n.id] > 0);
+                if (unvisitedNodes.length > 0 && nodes.some(n => n.es === 0 && n.id !== startNodeId)) {
+                     console.warn("Aviso: Ciclo detectado ou alguns nós são inalcançáveis a partir do início.");
+                     // Não retorna 'false' necessariamente, mas o cálculo pode estar incorreto
+                }
             }
-            // Verificação de ciclo (se um nó ainda tem predecessores não resolvidos)
-            if(Object.values(nodePredecessors).some(count => count > 0)) {
-                 console.error("Erro: Ciclo detectado no grafo. Não é possível calcular o caminho.");
-                 return false;
-            }
-
 
             // --- 2. Backward Pass (Cálculo do Tempo Tarde - LS) ---
             const projectDuration = endNode.es;
             endNode.ls = projectDuration;
             
-            // Preenche os 'ls' com Infinito para nós que não são o fim
-            nodes.forEach(n => { if (n.id !== endNodeId) n.ls = Infinity; });
-            
-            let nodeSuccessors = {};
+            // Reseta LS para nós inalcançáveis (define como a duração do projeto)
             nodes.forEach(n => {
-                nodeSuccessors[n.id] = tasks.filter(t => t.from === n.id).length;
+                if(n.es === 0 && n.id !== startNodeId) {
+                    n.ls = projectDuration;
+                }
+            });
+            endNode.ls = projectDuration; // Garante
+
+            // Recalcula sucessores para o backward pass
+            let nodeSuccessorsCount = {};
+            nodes.forEach(n => {
+                nodeSuccessorsCount[n.id] = tasks.filter(t => t.from === n.id).length;
             });
 
             processQueue = [endNode];
             
             while(processQueue.length > 0) {
-                processQueue.sort((a,b) => b.ls - a.ls); // Processa nós com maior LS primeiro
                 const v = processQueue.shift();
                 
                 const incomingTasks = tasks.filter(t => t.to === v.id);
@@ -638,17 +762,36 @@
                 for(const task of incomingTasks) {
                     const u = nodes.find(n => n.id === task.from);
                     if (!u) continue;
-                    
+
                     const newLS = v.ls - task.time;
                     
                     if (newLS < u.ls) {
                         u.ls = newLS;
                     }
                     
-                    nodeSuccessors[u.id]--;
-                    if(nodeSuccessors[u.id] === 0 && !processQueue.includes(u)) {
+                    nodeSuccessorsCount[u.id]--;
+                    if(nodeSuccessorsCount[u.id] === 0 && u.id !== startNodeId) {
                         processQueue.push(u);
                     }
+                    // Garante que o nó inicial seja processado no final
+                    if (u.id === startNodeId && nodeSuccessorsCount[u.id] === 0) {
+                         if (!processQueue.includes(startNode)) {
+                             processQueue.push(startNode);
+                         }
+                    }
+                }
+            }
+             // Caso especial: se o nó inicial não foi processado (ex: grafo simples A->B)
+            if (startNode.ls === Infinity) {
+                const taskToStart = tasks.find(t => t.to === startNodeId);
+                if (!taskToStart) { // É o nó inicial real
+                    const outgoing = tasks.filter(t => t.from === startNodeId);
+                    let minLs = Infinity;
+                    outgoing.forEach(t => {
+                        const nextNode = nodes.find(n => n.id === t.to);
+                        if(nextNode) minLs = Math.min(minLs, nextNode.ls - t.time);
+                    });
+                    startNode.ls = (minLs === Infinity) ? 0 : minLs;
                 }
             }
             
@@ -656,14 +799,14 @@
             const tolerance = 1e-5; // Tolerância para comparação de floats
             
             nodes.forEach(n => {
-                // Se 'ls' nunca foi atualizado (nó inalcançável no backward pass),
-                // define para o tempo do projeto para evitar Infinito
-                if (n.ls === Infinity) {
-                    n.ls = projectDuration;
-                }
-                
                 const slack = n.ls - n.es;
-                if (Math.abs(slack) < tolerance) {
+                if (Math.abs(slack) < tolerance && n.es > 0) { // Nó crítico (e alcançável)
+                    n.isCritical = true;
+                }
+                if (n.id === startNodeId && Math.abs(slack) < tolerance) {
+                     n.isCritical = true;
+                }
+                if (n.id === endNodeId) { // Nó final é sempre crítico
                     n.isCritical = true;
                 }
             });
@@ -671,6 +814,8 @@
             tasks.forEach(task => {
                 const fromNode = nodes.find(n => n.id === task.from);
                 const toNode = nodes.find(n => n.id === task.to);
+                if (!fromNode || !toNode) return;
+
                 // Folga da tarefa = LS(fim) - ES(início) - Duração
                 const slack = toNode.ls - fromNode.es - task.time;
                 task.slack = slack;
@@ -685,6 +830,7 @@
 
 
         // --- Funções de Import/Export ---
+        // (O código de Import/Export existente é mantido aqui)
 
         // JSON
         document.getElementById('export-json-btn').addEventListener('click', () => {
@@ -718,6 +864,7 @@
                     nextTaskId = data.nextTaskId || 1;
                     startNodeId = data.startNodeId || null;
                     endNodeId = data.endNodeId || null;
+                    selectedNodeIds.clear(); // Limpa seleção ao importar
                     render();
                     setMode('view');
                 } catch (err) {
@@ -728,62 +875,38 @@
             fileInput.value = null; // Reseta o input
         });
 
+        // --- Lógica de Exportação de SVG (Com Estilos) ---
+        
+        // Função auxiliar para copiar estilos
         function getClonedSvgWithStyles() {
-            const svg = document.getElementById('diagram-svg');
-            const styleSheet = document.getElementById('pert-svg-styles').sheet;
-            
-            let cssText = "";
-            if (styleSheet) {
-                try {
-                    for (const rule of styleSheet.cssRules) {
-                        // Exclui regras de 'body' ou ':hover' que não se aplicam a exportações estáticas
-                        if (rule.selectorText && !rule.selectorText.includes('body') && !rule.selectorText.includes(':hover')) {
-                            cssText += rule.cssText + "\n";
-                        }
-                    }
-                } catch (e) {
-                     console.error("Não foi possível ler as regras de CSS (talvez por CORS, se estivessem em outro domínio):", e);
-                     // Fallback: tenta usar innerHTML (menos ideal)
-                     cssText = document.getElementById('pert-svg-styles').innerHTML;
-                }
-            }
-
             const clonedSvg = svg.cloneNode(true);
-            
-            // Cria um elemento <style> para o SVG
-            const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-            styleEl.textContent = cssText;
+            clonedSvg.setAttribute('width', svg.clientWidth);
+            clonedSvg.setAttribute('height', svg.clientHeight);
 
-            let defs = clonedSvg.querySelector('defs');
-            if (!defs) {
-                defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-                clonedSvg.prepend(defs);
+            const styleDef = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+            
+            // 1. Pega os estilos da tag <style>
+            const styleElement = document.getElementById('pert-svg-styles');
+            if (styleElement) {
+                styleDef.textContent = styleElement.innerHTML;
             }
             
-            // Adiciona os estilos coletados às <defs> do clone
-            defs.appendChild(styleEl);
-
-            // CORREÇÃO: Define atributos de fonte explícitos nos textos
-            // para garantir que renderizem corretamente em PNG/PDF
-            clonedSvg.querySelectorAll('.node-text, .node-es-ls-text, .task-text').forEach(textEl => {
-                if (!textEl.style.fontFamily) {
-                    if (textEl.classList.contains('node-es-ls-text')) {
-                         textEl.style.fontFamily = 'monospace';
-                    } else {
-                         textEl.style.fontFamily = 'Inter, sans-serif';
-                    }
+            // 2. MUDANÇA: Adiciona manualmente a fonte, pois o SVG exportado pode perdê-la
+            styleDef.textContent += `
+                svg { 
+                    font-family: 'Inter', sans-serif; 
                 }
-                 if (textEl.classList.contains('task-text')) {
-                     textEl.style.paintOrder = 'stroke';
-                     textEl.style.stroke = '#fff';
-                     textEl.style.strokeWidth = '3px';
-                     textEl.style.strokeLinecap = 'butt';
-                     textEl.style.strokeLinejoin = 'miter';
-                 }
-            });
+                .task-text {
+                    /* Garante que a sombra seja aplicada no SVG exportado */
+                    text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
+                }
+            `;
+            
+            clonedSvg.querySelector('defs').appendChild(styleDef);
             return clonedSvg;
         }
 
+        // SVG
         document.getElementById('export-svg-btn').addEventListener('click', () => {
             if (typeof saveAs === 'undefined') {
                 console.error("Erro: Biblioteca FileSaver.js não carregada.");
@@ -793,8 +916,13 @@
             const svgData = new XMLSerializer().serializeToString(clonedSvg);
             const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
             saveAs(blob, 'diagrama-rede.svg');
-            setMode('view');
         });
+
+        // --- Inicialização ---
+        setMode('view');
+        render();
+
     </script>
 </body>
 </html>
+
