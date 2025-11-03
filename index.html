@@ -213,6 +213,15 @@
         let originalNodePositions = new Map();
         let didDrag = false; // Para diferenciar 'drag' de 'click'
 
+        // MUDANÇA: Variáveis para Pan (arrastar) e Zoom
+        let viewTransform = {
+            scale: 1,
+            translateX: 0,
+            translateY: 0
+        };
+        let isPanning = false;
+        let panStartPoint = { x: 0, y: 0 };
+
 
         // --- Funções de Renderização ---
 
@@ -221,6 +230,13 @@
             while (svg.lastChild && svg.lastChild.tagName !== 'defs') {
                 svg.removeChild(svg.lastChild);
             }
+
+            // MUDANÇA: Cria um grupo <g> que conterá todos os elementos
+            // Isso permite aplicar Pan e Zoom a tudo de uma vez
+            const viewportGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            viewportGroup.setAttribute('id', 'viewport-group');
+            viewportGroup.setAttribute('transform', `translate(${viewTransform.translateX}, ${viewTransform.translateY}) scale(${viewTransform.scale})`);
+            svg.appendChild(viewportGroup);
 
             // Renderiza Tarefas (Setas) - primeiro para ficarem por baixo
             tasks.forEach(task => {
@@ -252,7 +268,7 @@
                     line.setAttribute('marker-end', 'url(#arrowhead)');
                 }
 
-                svg.appendChild(line);
+                viewportGroup.appendChild(line); // MUDANÇA: Adiciona ao viewportGroup
 
                 // Texto da Tarefa
                 const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -265,7 +281,7 @@
                 text.setAttribute('dy', '0.3em'); // Ajuste vertical
                 text.classList.add('task-text');
                 text.textContent = `${task.name} (${task.time})`;
-                svg.appendChild(text);
+                viewportGroup.appendChild(text); // MUDANÇA: Adiciona ao viewportGroup
             });
 
             // Renderiza Eventos (Nós)
@@ -308,10 +324,21 @@
                 eslsText.setAttribute('text-anchor', 'middle');
                 eslsText.setAttribute('y', -NODE_RADIUS - 5); // Acima do nó
                 eslsText.classList.add('node-es-ls-text');
-                eslsText.textContent = `[${node.es | 0} | ${node.ls === Infinity ? 'Inf' : (node.ls | 0)}]`;
+                
+                // MUDANÇA: Inverte Ls/Es e adiciona Folga
+                const esText = node.es | 0;
+                const lsText = node.ls === Infinity ? 'Inf' : (node.ls | 0);
+                let slackText = 'Inf';
+                if (node.ls !== Infinity && node.es !== Infinity) {
+                    // Arredonda a folga para evitar problemas de float (ex: 5.99999)
+                    const slack = Math.round(node.ls - node.es);
+                    slackText = slack;
+                }
+                eslsText.textContent = `[${lsText} | ${esText}] = ${slackText}`;
+                
                 group.appendChild(eslsText);
 
-                svg.appendChild(group);
+                viewportGroup.appendChild(group); // MUDANÇA: Adiciona ao viewportGroup
             });
         }
 
@@ -327,7 +354,8 @@
             
             switch (newMode) {
                 case 'view':
-                    statusText.textContent = 'Visualizando (Shift+Click para selecionar)';
+                    // MUDANÇA: Atualiza texto de status para incluir Pan
+                    statusText.textContent = 'Visualizando (Shift+Click: Seleção, Alt+Drag: Mover)';
                     statusText.className = 'font-medium text-gray-700';
                     svg.style.cursor = 'grab';
                     break;
@@ -486,23 +514,31 @@
                 }
 
             } else if (currentMode === 'view') {
-                // Clicou no vazio (inicia selection box), SÓ no modo 'view'
-                isSelecting = true;
-                selectionBoxStart = svgPoint;
-                selectionBoxElement = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                selectionBoxElement.setAttribute('x', svgPoint.x);
-                selectionBoxElement.setAttribute('y', svgPoint.y);
-                selectionBoxElement.setAttribute('width', 0);
-                selectionBoxElement.setAttribute('height', 0);
-                selectionBoxElement.style.fill = 'rgba(43, 108, 176, 0.2)';
-                selectionBoxElement.style.stroke = '#2b6cb0';
-                selectionBoxElement.style.strokeWidth = '1px';
-                svg.appendChild(selectionBoxElement);
-                
-                if (!e.shiftKey) {
-                    selectedNodeIds.clear();
-                    render();
-                }
+                // MUDANÇA: Verifica se é Pan (Alt+Click) ou Seleção
+                if (e.altKey) {
+                    // Inicia o Pan
+                    isPanning = true;
+                    panStartPoint = { x: e.clientX, y: e.clientY };
+                    svg.style.cursor = 'move';
+                } else {
+                    // Clicou no vazio (inicia selection box), SÓ no modo 'view'
+                    // MUDANÇA: Adiciona chaves { } faltando
+                    isSelecting = true;
+                    selectionBoxStart = svgPoint;
+                    selectionBoxElement = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    
+                    // Adiciona estilos ao box (para que seja visível)
+                    selectionBoxElement.setAttribute('fill', 'rgba(43, 108, 176, 0.2)');
+                    selectionBoxElement.setAttribute('stroke', 'rgba(43, 108, 176, 0.5)');
+                    selectionBoxElement.setAttribute('stroke-width', '1');
+                    
+                    svg.appendChild(selectionBoxElement);
+                    
+                    if (!e.shiftKey) {
+                        selectedNodeIds.clear();
+                        render();
+                    }
+                } // MUDANÇA: Fecha o bloco 'else'
             }
             // Se clicou no vazio e não está em 'view' mode, o 'click' handler vai cuidar (ex: 'add-node')
         });
@@ -523,6 +559,22 @@
                     }
                 }
                 render();
+            // MUDANÇA: Lógica de Pan (Arrastar)
+            } else if (isPanning) {
+                didDrag = true;
+                const dx = e.clientX - panStartPoint.x;
+                const dy = e.clientY - panStartPoint.y;
+                
+                viewTransform.translateX += dx;
+                viewTransform.translateY += dy;
+                
+                panStartPoint = { x: e.clientX, y: e.clientY }; // Atualiza ponto inicial para próximo movimento
+                
+                // Re-aplica o transform
+                const viewportGroup = document.getElementById('viewport-group');
+                if(viewportGroup) {
+                    viewportGroup.setAttribute('transform', `translate(${viewTransform.translateX}, ${viewTransform.translateY}) scale(${viewTransform.scale})`);
+                }
             } else if (isSelecting) {
                 didDrag = true; // Desenhar um box também conta como 'drag'
                 const svgPoint = getSVGPoint(e.clientX, e.clientY);
@@ -543,6 +595,10 @@
                 draggedNodeId = null;
                 originalNodePositions.clear();
                 setMode(currentMode); // Reseta o cursor (ex: de 'grabbing' para 'grab')
+            // MUDANÇA: Reseta o Pan
+            } else if (isPanning) {
+                isPanning = false;
+                setMode('view'); // Reseta o cursor para 'grab'
             } else if (isSelecting) {
                 isSelecting = false;
                 // Finaliza a seleção do box
@@ -676,12 +732,46 @@
             setMode('add-task-start');
         });
         
+        // MUDANÇA: getSVGPoint agora precisa considerar o Pan/Zoom (viewportGroup)
         function getSVGPoint(clientX, clientY) {
+            const viewportGroup = document.getElementById('viewport-group');
             const pt = svg.createSVGPoint();
             pt.x = clientX;
             pt.y = clientY;
-            return pt.matrixTransform(svg.getScreenCTM().inverse());
+
+            if (!viewportGroup) {
+                // Fallback se o viewport-group ainda não foi renderizado
+                return pt.matrixTransform(svg.getScreenCTM().inverse());
+            }
+            // Converte ponto da tela para o sistema de coordenadas do viewportGroup (mundo)
+            // Isso agora contabiliza o <g> transform
+            return pt.matrixTransform(viewportGroup.getScreenCTM().inverse());
         }
+
+        // MUDANÇA: Adiciona listener para Zoom (roda do mouse)
+        svg.addEventListener('wheel', (e) => {
+            e.preventDefault(); // Impede o scroll da página
+            if (currentMode !== 'view') return; // Zoom só no modo 'view'
+
+            const viewportGroup = document.getElementById('viewport-group');
+            if (!viewportGroup) return;
+
+            const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1; // 0.9 = zoom out, 1.1 = zoom in
+            const oldScale = viewTransform.scale;
+            
+            viewTransform.scale = Math.max(0.1, Math.min(5, viewTransform.scale * zoomFactor)); // Limita o zoom
+            
+            // Pega o ponto do mouse relativo ao "mundo" (dentro do <g>)
+            const worldPoint = getSVGPoint(e.clientX, e.clientY);
+
+            // Calcula o novo translate para que o zoom seja "em direção ao mouse"
+            // Esta é a fórmula padrão de zoom-to-point
+            viewTransform.translateX = worldPoint.x - (worldPoint.x - viewTransform.translateX) * (viewTransform.scale / oldScale);
+            viewTransform.translateY = worldPoint.y - (worldPoint.y - viewTransform.translateY) * (viewTransform.scale / oldScale);
+            
+            viewportGroup.setAttribute('transform', `translate(${viewTransform.translateX}, ${viewTransform.translateY}) scale(${viewTransform.scale})`);
+        });
+
 
         // --- Lógica de Cálculo (CPM) ---
 
@@ -934,6 +1024,8 @@
     </script>
 </body>
 </html>
+
+
 
 
 
