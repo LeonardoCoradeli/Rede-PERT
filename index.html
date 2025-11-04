@@ -1079,10 +1079,10 @@
                             time: {
                                 unit: 'week', // Agrupado por semana
                                 displayFormats: {
-                                    week: 'dd-MMM-yy'
+                                    week: 'dd/MM'
                                 }
                             },
-                            min: projectStartDate.getTime(), // Início do gráfico
+                            min: projectStartDate.getTime(),
                             title: {
                                 display: true,
                                 text: 'Datas (Início da Semana)'
@@ -1092,7 +1092,7 @@
                             }
                         },
                         y: {
-                            stacked: true, // Agrupa as categorias
+                            stacked: true,
                             title: {
                                 display: true,
                                 text: 'Categorias de Tarefa'
@@ -1105,13 +1105,11 @@
                 }
             };
             
-            // --- C. Desenhar em Canvas Off-screen e Exportar para PDF ---
-            
             // Define o tamanho (Paisagem) - 16:9
-            const chartWidth = 1600;
             // Altura dinâmica baseada no número de categorias
-            const chartHeight = Math.max(600, categories.length * 40 + 150); // 40px por categoria + 150px para eixos/título
-
+            const chartHeight = Math.max(1200, categories.length * 80 + 300); // 40px por categoria + 150px para eixos/título
+            //Define largura dinâmica baseado na altura
+            const chartWidth = chartHeight * 21 / 9;
             // Cria o canvas temporário
             const offscreenCanvas = document.createElement('canvas');
             offscreenCanvas.width = chartWidth;
@@ -1164,11 +1162,6 @@
 
         // 4. Conectar o botão
         document.getElementById('export-gantt-pdf-btn').addEventListener('click', exportGanttToPdf);
-
-        // --- ================================== ---
-        // --- FIM DO NOVO CÓDIGO DE GANTT ---
-        // --- ================================== ---
-
 
         // --- Inicialização ---
         setMode('view');
