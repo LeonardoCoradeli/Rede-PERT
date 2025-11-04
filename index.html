@@ -7,15 +7,12 @@
     <!-- 1. Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- 2. Bibliotecas de Exportação (FileSaver já estava) -->
+    <!-- 2. Bibliotecas de Exportação (FileSaver) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
-    <!-- 3. NOVAS Bibliotecas para Gantt PDF -->
-    <!-- jsPDF para criar o PDF -->
+    <!-- 3. Bibliotecas para Gantt PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <!-- Chart.js para desenhar o gráfico -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- date-fns e o adapter para Chart.js lidar com datas -->
     <script src="https://cdn.jsdelivr.net/npm/date-fns/cdn.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 
@@ -48,6 +45,15 @@
             stroke: #4a5568;
             stroke-width: 2;
             marker-end: url(#arrowhead);
+            /* Aumenta a área de clique para o contextmenu */
+            pointer-events: stroke;
+            stroke-opacity: 0.8;
+        }
+        /* Linha invisível mais espessa para facilitar o clique */
+        .task-line-hitbox {
+            stroke: transparent;
+            stroke-width: 15;
+            pointer-events: stroke;
         }
         .task-text {
             font-size: 11px;
@@ -71,9 +77,43 @@
         .critical-path-task {
             stroke: #c53030; /* Vermelho */
             stroke-width: 3;
+            stroke-opacity: 1;
         }
         .node:hover {
             transform: scale(1.1);
+        }
+
+        /* NOVO: Menu de Contexto */
+        #context-menu {
+            position: fixed;
+            display: none;
+            background-color: white;
+            border: 1px solid #cbd5e0;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            z-index: 1000;
+            padding: 4px 0;
+            min-width: 150px;
+        }
+        .context-menu-item {
+            padding: 8px 16px;
+            font-size: 14px;
+            color: #2d3748;
+            cursor: pointer;
+        }
+        .context-menu-item:hover {
+            background-color: #f7fafc;
+        }
+        .context-menu-item.delete {
+            color: #c53030;
+        }
+        .context-menu-item.delete:hover {
+            background-color: #fed7d7;
+        }
+        .context-menu-divider {
+            height: 1px;
+            margin: 4px 0;
+            background-color: #e2e8f0;
         }
     </style>
 </head>
@@ -106,7 +146,7 @@
         <fieldset class="border-t pt-3">
             <legend class="text-sm font-semibold text-gray-600">Calcular</legend>
             
-            <!-- NOVO: Input de Data de Início -->
+            <!-- Input de Data de Início -->
             <div class="mt-2">
                 <label for="start-date-input" class="block text-sm font-medium text-gray-700">Data de Início</label>
                 <input type="date" id="start-date-input" value="2025-08-04" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
@@ -134,7 +174,6 @@
             <legend class="text-sm font-semibold text-gray-600">Exportar Imagem</legend>
             <div class="grid grid-cols-1 gap-2 mt-2">
                 <button id="export-svg-btn" class="p-2 bg-teal-500 text-white rounded-lg shadow hover:bg-teal-600 transition">Exportar SVG</button>
-                <!-- NOVO: Botão Exportar Gantt PDF -->
                 <button id="export-gantt-pdf-btn" class="p-2 bg-cyan-600 text-white rounded-lg shadow hover:bg-cyan-700 transition">Exportar Gantt (PDF)</button>
             </div>
         </fieldset>
@@ -170,10 +209,10 @@
         </div>
     </div>
 
-    <!-- Modal para Adicionar Tarefa (Oculto) -->
+    <!-- Modal para Adicionar/Editar Tarefa (Oculto) -->
     <div id="task-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center hidden">
         <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm">
-            <h3 class="text-lg font-bold mb-4">Adicionar Tarefa</h3>
+            <h3 id="task-modal-title" class="text-lg font-bold mb-4">Adicionar Tarefa</h3>
             <form id="task-form">
                 <div class="mb-4">
                     <label for="task-name" class="block text-sm font-medium text-gray-700">Nome da Tarefa</label>
@@ -190,6 +229,12 @@
             </form>
         </div>
     </div>
+    
+    <!-- NOVO: Menu de Contexto (Oculto) -->
+    <div id="context-menu">
+        <!-- O conteúdo será preenchido dinamicamente pelo JS -->
+    </div>
+
 
     <!-- Script Principal da Aplicação -->
     <script type="module">
@@ -197,17 +242,18 @@
         const svg = document.getElementById('diagram-svg');
         const statusText = document.getElementById('status-text');
         const taskModal = document.getElementById('task-modal');
+        const taskModalTitle = document.getElementById('task-modal-title');
         const taskForm = document.getElementById('task-form');
         const taskNameInput = document.getElementById('task-name');
         const taskTimeInput = document.getElementById('task-time');
         const fileInput = document.getElementById('file-input');
-        // NOVO: Input de data
         const startDateInput = document.getElementById('start-date-input');
+        // NOVO: Menu de Contexto
+        const contextMenu = document.getElementById('context-menu');
 
         const NODE_RADIUS = 25;
 
         // --- Estado da Aplicação ---
-        // (nodes, tasks, etc. são acessíveis globalmente dentro deste módulo)
         let nodes = []; // { id, x, y, text, es (cedo), ls (tarde) }
         let tasks = []; // { id, from, to, name, time, slack, isCritical }
         let nextNodeId = 1;
@@ -237,9 +283,12 @@
         };
         let isPanning = false;
         let panStartPoint = { x: 0, y: 0 };
+        
+        // NOVO: Estado da barra de espaço
+        let isSpacePressed = false;
 
 
-        // --- Funções de Renderização (seu código original) ---
+        // --- Funções de Renderização ---
         function render() {
             while (svg.lastChild && svg.lastChild.tagName !== 'defs') {
                 svg.removeChild(svg.lastChild);
@@ -263,7 +312,24 @@
                 const ratio = (dist - NODE_RADIUS) / dist;
                 const targetX = fromNode.x + dx * ratio;
                 const targetY = fromNode.y + dy * ratio;
+                
+                const midX = (fromNode.x + toNode.x) / 2;
+                const midY = (fromNode.y + toNode.y) / 2;
 
+                // NOVO: Grupo para tarefa (linha + hitbox + texto)
+                const taskGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                taskGroup.dataset.taskId = task.id; // ID para contextmenu
+
+                // NOVO: Hitbox invisível
+                const lineHitbox = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                lineHitbox.setAttribute('x1', fromNode.x);
+                lineHitbox.setAttribute('y1', fromNode.y);
+                lineHitbox.setAttribute('x2', toNode.x); 
+                lineHitbox.setAttribute('y2', toNode.y);
+                lineHitbox.classList.add('task-line-hitbox');
+                taskGroup.appendChild(lineHitbox);
+
+                // Linha visível
                 const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
                 line.setAttribute('x1', fromNode.x);
                 line.setAttribute('y1', fromNode.y);
@@ -277,24 +343,25 @@
                 } else {
                     line.setAttribute('marker-end', 'url(#arrowhead)');
                 }
-                viewportGroup.appendChild(line);
+                taskGroup.appendChild(line);
 
+                // Texto da tarefa
                 const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-                const midX = (fromNode.x + toNode.x) / 2;
-                const midY = (fromNode.y + toNode.y) / 2;
                 text.setAttribute('x', midX);
                 text.setAttribute('y', midY);
                 text.setAttribute('text-anchor', 'middle');
                 text.setAttribute('dy', '0.3em'); 
                 text.classList.add('task-text');
                 text.textContent = `${task.name} (${task.time})`;
-                viewportGroup.appendChild(text);
+                taskGroup.appendChild(text);
+                
+                viewportGroup.appendChild(taskGroup);
             });
 
             nodes.forEach(node => {
                 const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
                 group.setAttribute('transform', `translate(${node.x}, ${node.y})`);
-                group.dataset.id = node.id;
+                group.dataset.nodeId = node.id; // ID para contextmenu e clique
 
                 const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                 circle.setAttribute('r', NODE_RADIUS);
@@ -340,9 +407,11 @@
             });
         }
 
-        // --- Funções de Lógica de UI (seu código original) ---
+        // --- Funções de Lógica de UI ---
         function setMode(newMode) {
             currentMode = newMode;
+            hideContextMenu(); // Esconde o menu ao trocar de modo
+            
             if (newMode !== 'view') {
                 selectedNodeIds.clear();
                 render();
@@ -350,7 +419,8 @@
             
             switch (newMode) {
                 case 'view':
-                    statusText.textContent = 'Visualizando (Shift+Click: Seleção, Alt+Drag: Mover)';
+                    // ATUALIZADO: Texto de status
+                    statusText.textContent = 'Visualizando (Shift+Click: Seleção, Espaço+Drag: Mover)';
                     statusText.className = 'font-medium text-gray-700';
                     svg.style.cursor = 'grab';
                     break;
@@ -381,38 +451,134 @@
                     break;
             }
         }
-        function showTaskModal() {
+        
+        // --- NOVO: Lógica do Modal de Tarefa (Adicionar/Editar) ---
+        function showTaskModal(taskId = null) {
+            if (taskId) {
+                // Modo Edição
+                const task = tasks.find(t => t.id === taskId);
+                if (!task) return;
+                
+                taskModalTitle.textContent = 'Editar Tarefa';
+                taskNameInput.value = task.name;
+                taskTimeInput.value = task.time;
+                taskForm.dataset.mode = 'edit';
+                taskForm.dataset.editId = taskId;
+                // Os campos 'from' e 'to' não mudam na edição
+                taskForm.dataset.from = task.from;
+                taskForm.dataset.to = task.to;
+            } else {
+                // Modo Adicionar
+                taskModalTitle.textContent = 'Adicionar Tarefa';
+                taskNameInput.value = `T${nextTaskId}`;
+                taskTimeInput.value = 1;
+                taskForm.dataset.mode = 'add';
+                taskForm.dataset.editId = '';
+                // 'from' e 'to' são definidos pelo clique
+                taskForm.dataset.from = tempTaskStartNodeId;
+                taskForm.dataset.to = taskForm.dataset.toNodeId; // pego do clique
+            }
+            
             taskModal.classList.remove('hidden');
             taskNameInput.focus();
         }
+
         function hideTaskModal() {
             taskModal.classList.add('hidden');
             taskForm.reset();
+            // Limpa os datasets
+            taskForm.dataset.mode = '';
+            taskForm.dataset.editId = '';
+            taskForm.dataset.from = '';
+            taskForm.dataset.to = '';
         }
+
+        // --- NOVO: Funções de busca de ID ---
         function getClickedNodeId(target) {
             let el = target;
             while (el && el !== svg) {
-                if (el.tagName === 'g' && el.dataset.id) {
-                    return parseInt(el.dataset.id);
+                if (el.tagName === 'g' && el.dataset.nodeId) {
+                    return parseInt(el.dataset.nodeId);
                 }
-                if ((el.tagName === 'circle' || el.tagName === 'text') && el.parentElement.tagName === 'g' && el.parentElement.dataset.id) {
-                    return parseInt(el.parentElement.dataset.id);
+                // Permite clique no círculo ou texto dentro do grupo
+                if ((el.tagName === 'circle' || el.tagName === 'text') && el.parentElement.tagName === 'g' && el.parentElement.dataset.nodeId) {
+                    return parseInt(el.parentElement.dataset.nodeId);
                 }
                 el = el.parentElement;
             }
             return null;
         }
+
+        function getClickedTaskId(target) {
+            let el = target;
+            while (el && el !== svg) {
+                // Verifica o grupo, a linha, ou a hitbox
+                if (el.dataset && el.dataset.taskId) {
+                    return parseInt(el.dataset.taskId);
+                }
+                el = el.parentElement;
+            }
+            return null;
+        }
+
+        // --- NOVO: Funções de Exclusão ---
         function deleteNode(nodeId) {
             nodes = nodes.filter(n => n.id !== nodeId);
+            // Exclui tarefas conectadas
             tasks = tasks.filter(t => t.from !== nodeId && t.to !== nodeId);
             if (startNodeId === nodeId) startNodeId = null;
             if (endNodeId === nodeId) endNodeId = null;
             selectedNodeIds.delete(nodeId);
-            console.log(`Nó ${nodeId} excluído.`);
+            console.log(`Nó ${nodeId} e tarefas conectadas excluídos.`);
             render();
         }
 
-        // --- Handlers de Eventos (seu código original) ---
+        function deleteTask(taskId) {
+            tasks = tasks.filter(t => t.id !== taskId);
+            console.log(`Tarefa ${taskId} excluída.`);
+            render();
+        }
+
+        // --- NOVO: Funções do Menu de Contexto ---
+        function showContextMenu(x, y, options) {
+            contextMenu.innerHTML = ''; // Limpa opções anteriores
+            
+            options.forEach(option => {
+                if (option.divider) {
+                    const div = document.createElement('div');
+                    div.className = 'context-menu-divider';
+                    contextMenu.appendChild(div);
+                } else {
+                    const item = document.createElement('div');
+                    item.className = 'context-menu-item';
+                    if (option.class) {
+                        item.classList.add(option.class);
+                    }
+                    item.textContent = option.label;
+                    item.onclick = () => {
+                        option.callback();
+                        hideContextMenu();
+                    };
+                    contextMenu.appendChild(item);
+                }
+            });
+
+            // Posiciona o menu
+            contextMenu.style.left = `${x}px`;
+            contextMenu.style.top = `${y}px`;
+            contextMenu.style.display = 'block';
+        }
+
+        function hideContextMenu() {
+            contextMenu.style.display = 'none';
+        }
+        
+        // Fecha o menu de contexto ao clicar em qualquer lugar
+        window.addEventListener('click', hideContextMenu);
+        // Também fecha ao rolar (wheel)
+        svg.addEventListener('wheel', hideContextMenu, { passive: true });
+
+        // --- Handlers de Eventos (Botões) ---
         document.getElementById('add-node-btn').addEventListener('click', () => setMode('add-node'));
         document.getElementById('add-task-btn').addEventListener('click', () => setMode('add-task-start'));
         document.getElementById('view-mode-btn').addEventListener('click', () => setMode('view'));
@@ -437,8 +603,16 @@
             }
         });
 
+        // --- Handlers de Eventos (SVG - Mouse) ---
+
         svg.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return; 
+            // Esconde o menu se clicar com o botão esquerdo
+            if (e.button === 0) {
+                 hideContextMenu();
+            } else {
+                return; // Ignora outros botões (direito é tratado no contextmenu)
+            }
+            
             didDrag = false; 
             const nodeId = getClickedNodeId(e.target);
             const svgPoint = getSVGPoint(e.clientX, e.clientY);
@@ -476,7 +650,8 @@
                     }
                 }
             } else if (currentMode === 'view') {
-                if (e.altKey) {
+                // ATUALIZADO: Verifica 'isSpacePressed' em vez de 'e.altKey'
+                if (isSpacePressed) {
                     isPanning = true;
                     panStartPoint = { x: e.clientX, y: e.clientY };
                     svg.style.cursor = 'move';
@@ -565,11 +740,69 @@
             }
         });
 
+        // --- NOVO: Handler do Menu de Contexto (Botão Direito) ---
         svg.addEventListener('contextmenu', (e) => {
             e.preventDefault(); 
+            hideContextMenu(); // Esconde qualquer menu anterior
+            
             const nodeId = getClickedNodeId(e.target);
+            const taskId = getClickedTaskId(e.target);
+
             if (nodeId) {
-                deleteNode(nodeId);
+                const node = nodes.find(n => n.id === nodeId);
+                if (!node) return;
+                
+                const options = [
+                    {
+                        label: `Renomear Evento "${node.text}"`,
+                        callback: () => {
+                            // ATUALIZAÇÃO: Adicionado setTimeout de 0ms.
+                            // Isso move o prompt() para o próximo ciclo de eventos,
+                            // garantindo que a UI possa ser atualizada após
+                            // o prompt ser fechado.
+                            setTimeout(() => {
+                                const newName = prompt('Digite o novo nome para o evento:', node.text);
+                                if (newName && newName.trim() !== '') {
+                                    node.text = newName.trim();
+                                    render();
+                                }
+                            }, 0);
+                        }
+                    },
+                    { divider: true },
+                    {
+                        label: 'Excluir Evento',
+                        class: 'delete',
+                        callback: () => {
+                            // Usamos setTimeout para evitar problemas de re-renderização
+                            setTimeout(() => deleteNode(nodeId), 0);
+                        }
+                    }
+                ];
+                showContextMenu(e.clientX, e.clientY, options);
+
+            } else if (taskId) {
+                const task = tasks.find(t => t.id === taskId);
+                if (!task) return;
+
+                const options = [
+                    {
+                        label: `Editar Tarefa "${task.name}"`,
+                        callback: () => {
+                            // Abre o modal em modo de edição
+                            showTaskModal(taskId);
+                        }
+                    },
+                    { divider: true },
+                    {
+                        label: 'Excluir Tarefa',
+                        class: 'delete',
+                        callback: () => {
+                            setTimeout(() => deleteTask(taskId), 0);
+                        }
+                    }
+                ];
+                showContextMenu(e.clientX, e.clientY, options);
             }
         });
 
@@ -603,9 +836,9 @@
                     break;
                 case 'add-task-end':
                     if (clickedNodeId && clickedNodeId !== tempTaskStartNodeId) {
-                        taskForm.dataset.from = tempTaskStartNodeId;
-                        taskForm.dataset.to = clickedNodeId;
-                        showTaskModal();
+                        // ATUALIZADO: Define 'to' e chama showTaskModal sem ID
+                        taskForm.dataset.toNodeId = clickedNodeId; // ID do nó final
+                        showTaskModal(); // Chama sem ID para modo 'add'
                     } else {
                         setMode('add-task-start');
                     }
@@ -638,32 +871,57 @@
             }
         });
 
+        // --- ATUALIZADO: Handler do Formulário (Adicionar/Editar) ---
         taskForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            const from = parseInt(taskForm.dataset.from);
-            const to = parseInt(taskForm.dataset.to);
+            
             const name = taskNameInput.value;
             const time = parseFloat(taskTimeInput.value);
+            const mode = taskForm.dataset.mode;
+            
+            if (mode === 'add') {
+                // Lógica de Adicionar
+                const from = parseInt(taskForm.dataset.from);
+                const to = parseInt(taskForm.dataset.toNodeId); // Pega o 'to' do dataset
 
-            if (from && to && name && time >= 0) {
-                tasks.push({
-                    id: nextTaskId++,
-                    from: from,
-                    to: to,
-                    name: name,
-                    time: time,
-                    slack: 0,
-                    isCritical: false
-                });
-                hideTaskModal();
-                setMode('add-task-start');
-                render();
+                if (from && to && name && time >= 0) {
+                    tasks.push({
+                        id: nextTaskId++,
+                        from: from,
+                        to: to,
+                        name: name,
+                        time: time,
+                        slack: 0,
+                        isCritical: false
+                    });
+                    hideTaskModal();
+                    setMode('add-task-start');
+                    render();
+                }
+            } else if (mode === 'edit') {
+                // Lógica de Edição
+                const taskId = parseInt(taskForm.dataset.editId);
+                const task = tasks.find(t => t.id === taskId);
+                
+                if (task && name && time >= 0) {
+                    task.name = name;
+                    task.time = time;
+                    hideTaskModal();
+                    setMode('view'); // Volta para o modo de visualização
+                    render();
+                }
             }
         });
 
         document.getElementById('cancel-task-btn').addEventListener('click', () => {
+            const mode = taskForm.dataset.mode;
             hideTaskModal();
-            setMode('add-task-start');
+            // Se estava adicionando, volta para o início da adição
+            if (mode === 'add') {
+                setMode('add-task-start');
+            } else {
+                setMode('view');
+            }
         });
         
         function getSVGPoint(clientX, clientY) {
@@ -677,6 +935,7 @@
             return pt.matrixTransform(viewportGroup.getScreenCTM().inverse());
         }
 
+        // --- Handlers de Eventos (Zoom e Pan com Teclado) ---
         svg.addEventListener('wheel', (e) => {
             e.preventDefault(); 
             if (currentMode !== 'view') return; 
@@ -697,7 +956,34 @@
             viewportGroup.setAttribute('transform', `translate(${viewTransform.translateX}, ${viewTransform.translateY}) scale(${viewTransform.scale})`);
         });
 
-        // --- Lógica de Cálculo (CPM) (seu código original) ---
+        // --- NOVO: Handlers do Teclado (Espaço para Pan) ---
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault(); // Impede o scroll da página
+                if (!isSpacePressed) {
+                    isSpacePressed = true;
+                    // Se estiver em modo 'view' e não estiver selecionando/arrastando
+                    if (currentMode === 'view' && !isSelecting && !isDragging) {
+                        svg.style.cursor = 'grab';
+                    }
+                }
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                isSpacePressed = false;
+                // Se estava em modo 'view' e não está no meio de um pan
+                if (currentMode === 'view' && !isPanning) {
+                    svg.style.cursor = 'grab'; // 'setMode' já define 'grab'
+                    setMode('view'); // Re-aplica o cursor padrão
+                }
+            }
+        });
+
+
+        // --- Lógica de Cálculo (CPM) (Sem alterações) ---
         function calculatePaths() {
             if (!startNodeId || !endNodeId) {
                 console.error("Por favor, defina um nó de INÍCIO e um nó de FIM antes de calcular.");
@@ -721,11 +1007,9 @@
             });
             
             let processQueue = [startNode];
-            let visitedCount = 0;
             let safetyCheck = 0;
             
             while(processQueue.length > 0) {
-                 // Proteção contra loops infinitos em grafos cíclicos
                 safetyCheck++;
                 if (safetyCheck > nodes.length * nodes.length) {
                     console.warn("Aviso: Cálculo interrompido, possível ciclo detectado.");
@@ -733,8 +1017,6 @@
                 }
                 
                 const u = processQueue.shift();
-                visitedCount++;
-                
                 const outgoingTasks = tasks.filter(t => t.from === u.id);
                 
                 for(const task of outgoingTasks) {
@@ -757,13 +1039,10 @@
             // --- 2. Backward Pass (Cálculo do Tempo Tarde - LS) ---
             const projectDuration = endNode.es;
             
-            // Define LS de todos os nós como a duração total
-            // Isso lida com nós inalcançáveis ou desconectados
             nodes.forEach(n => {
                 n.ls = projectDuration;
             });
 
-            // Recalcula sucessores para o backward pass
             let nodeSuccessorsCount = {};
             nodes.forEach(n => {
                 nodeSuccessorsCount[n.id] = tasks.filter(t => t.from === n.id).length;
@@ -773,7 +1052,6 @@
             safetyCheck = 0;
             
             while(processQueue.length > 0) {
-                 // Proteção contra loops
                 safetyCheck++;
                 if (safetyCheck > nodes.length * nodes.length) {
                     console.warn("Aviso: Cálculo (backward) interrompido, possível ciclo detectado.");
@@ -781,7 +1059,6 @@
                 }
 
                 const v = processQueue.shift();
-                
                 const incomingTasks = tasks.filter(t => t.to === v.id);
                 
                 for(const task of incomingTasks) {
@@ -795,9 +1072,8 @@
                     }
                     
                     nodeSuccessorsCount[u.id]--;
-                    // Só adiciona à fila se todos os caminhos sucessores tiverem sido processados
                     if(nodeSuccessorsCount[u.id] === 0) {
-                         if (!processQueue.includes(u)) { // Evita duplicatas
+                         if (!processQueue.includes(u)) { 
                             processQueue.push(u);
                          }
                     }
@@ -809,7 +1085,6 @@
             
             nodes.forEach(n => {
                 const slack = n.ls - n.es;
-                // Um nó é crítico se sua folga é (próxima de) zero
                 if (Math.abs(slack) < tolerance) {
                     n.isCritical = true;
                 }
@@ -820,11 +1095,9 @@
                 const toNode = nodes.find(n => n.id === task.to);
                 if (!fromNode || !toNode) return;
 
-                // Folga da tarefa = LS(fim) - ES(início) - Duração
                 const slack = toNode.ls - fromNode.es - task.time;
                 task.slack = slack;
                 
-                // Tarefa é crítica se sua folga é zero E conecta nós críticos
                 if (Math.abs(slack) < tolerance && fromNode.isCritical && toNode.isCritical) {
                     task.isCritical = true;
                 }
@@ -833,7 +1106,7 @@
             return true;
         }
 
-        // --- Funções de Import/Export (seu código original) ---
+        // --- Funções de Import/Export (Sem alterações) ---
         // JSON
         document.getElementById('export-json-btn').addEventListener('click', () => {
             const data = {
@@ -866,7 +1139,6 @@
                     startNodeId = data.startNodeId || null;
                     endNodeId = data.endNodeId || null;
                     selectedNodeIds.clear();
-                    // Limpa transformações de pan/zoom
                     viewTransform = { scale: 1, translateX: 0, translateY: 0 };
                     render();
                     setMode('view');
@@ -882,13 +1154,11 @@
         function getClonedSvgWithStyles() {
             const clonedSvg = svg.cloneNode(true);
             
-            // Define o BBox (bounding box) de todo o conteúdo
             const viewportGroup = clonedSvg.querySelector('#viewport-group');
             let bbox = { x: 0, y: 0, width: 1000, height: 800 }; // Default
             if (viewportGroup && viewportGroup.getBBox) {
                  try {
                     bbox = viewportGroup.getBBox();
-                    // Adiciona padding
                     bbox.x -= 50;
                     bbox.y -= 50;
                     bbox.width += 100;
@@ -898,7 +1168,6 @@
                  }
             }
 
-            // Remove o transform do grupo para que o viewBox funcione
             if (viewportGroup) {
                 viewportGroup.setAttribute('transform', '');
             }
@@ -931,12 +1200,7 @@
             saveAs(blob, 'diagrama-rede.svg');
         });
 
-        // --- ============================================ ---
-        // --- NOVO CÓDIGO: EXPORTAÇÃO DE GANTT (PDF) ---
-        // --- ============================================ ---
-
-        
-        // 2. Helper para agrupar tarefas (Portado do Python)
+        // --- Exportação de GANTT (PDF) (Sem alterações) ---
         function getTaskCategory(taskName) {
             taskName = String(taskName);
             if (taskName.includes("Diagrama de Sequência")) return "Diagrama de Sequência";
@@ -951,40 +1215,29 @@
             if (taskName.includes("SQA")) return "SQA (Qualidade)";
             if (taskName.includes("Documento de Requisitos")) return "Documentação";
             if (taskName.includes("Coleta de Requisitos")) return "Coleta de Requisitos";
-            
-            // Fallback
             return taskName.replace(/ \(E\d+-E\d+\)/, '').replace(/ Módulo \d/, '').trim();
         }
 
-        // 3. Função principal de exportação
         async function exportGanttToPdf() {
-            // Verifica se os dados necessários existem
             if (!startNodeId || nodes.length === 0 || tasks.length === 0) {
                 alert("Por favor, carregue um projeto e calcule os caminhos primeiro.");
                 return;
             }
             
-            // Pega a data de início do input
             const startDateValue = startDateInput.value;
             if (!startDateValue) {
                 alert("Por favor, defina uma Data de Início do projeto.");
                 return;
             }
-            // new Date(string) pode ser inconsistente, então fazemos o parse manual
             const [year, month, day] = startDateValue.split('-').map(Number);
             const projectStartDate = new Date(year, month - 1, day);
 
-            // --- A. Processar os dados (igual ao Python) ---
-            
-            // 1. Criar mapa de consulta de 'es' (início mais cedo)
+            // Processar dados
             const nodeStartTimes = new Map(nodes.map(n => [n.id, n.es]));
-
-            // 2. Processar tarefas
             const processedTasks = tasks.map(task => {
                 const startDaysOffset = nodeStartTimes.get(task.from);
                 const taskDuration = task.time;
                 
-                // Criar NOVAS instâncias de Date para cada tarefa
                 const startDate = new Date(projectStartDate);
                 startDate.setDate(startDate.getDate() + startDaysOffset);
                 
@@ -1000,10 +1253,8 @@
                 };
             });
 
-            // 3. Criar os datasets para o Chart.js
             const categories = [...new Set(processedTasks.map(t => t.category))];
             
-            // Ordenar categorias pela data de início mais cedo
             const categorySortMap = new Map();
             categories.forEach(cat => {
                 const minStartDate = Math.min(...processedTasks.filter(t => t.category === cat).map(t => t.start.getTime()));
@@ -1016,8 +1267,8 @@
 
             processedTasks.forEach(task => {
                 const dataPoint = {
-                    x: [task.start.getTime(), task.end.getTime()], // Chart.js usa [início, fim]
-                    y: task.category, // O 'label' da categoria no eixo Y
+                    x: [task.start.getTime(), task.end.getTime()], 
+                    y: task.category,
                     name: task.name
                 };
                 if (task.isCritical) {
@@ -1027,16 +1278,16 @@
                 }
             });
             
-            // --- B. Configurar o Chart.js ---
+            // Configurar Chart.js
             const chartConfig = {
                 type: 'bar',
                 data: {
-                    labels: categories, // Eixo Y
+                    labels: categories,
                     datasets: [
                         {
                             label: 'Não Crítico',
                             data: nonCriticalData,
-                            backgroundColor: 'rgba(54, 162, 235, 0.7)', // Azul
+                            backgroundColor: 'rgba(54, 162, 235, 0.7)',
                             borderColor: 'rgba(54, 162, 235, 1)',
                             borderWidth: 1,
                             barPercentage: 0.6
@@ -1044,7 +1295,7 @@
                         {
                             label: 'Crítico',
                             data: criticalData,
-                            backgroundColor: 'rgba(255, 99, 132, 0.7)', // Vermelho
+                            backgroundColor: 'rgba(255, 99, 132, 0.7)',
                             borderColor: 'rgba(255, 99, 132, 1)',
                             borderWidth: 1,
                             barPercentage: 0.6
@@ -1052,7 +1303,7 @@
                     ]
                 },
                 options: {
-                    indexAxis: 'y', // Isso torna o gráfico de barras horizontal
+                    indexAxis: 'y',
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
@@ -1075,9 +1326,9 @@
                     },
                     scales: {
                         x: {
-                            type: 'time', // Eixo X é de tempo
+                            type: 'time',
                             time: {
-                                unit: 'week', // Agrupado por semana
+                                unit: 'week',
                                 displayFormats: {
                                     week: 'dd/MM'
                                 }
@@ -1105,12 +1356,10 @@
                 }
             };
             
-            // Define o tamanho (Paisagem) - 16:9
-            // Altura dinâmica baseada no número de categorias
-            const chartHeight = Math.max(1200, categories.length * 80 + 300); // 40px por categoria + 150px para eixos/título
-            //Define largura dinâmica baseado na altura
+            // Define o tamanho
+            const chartHeight = Math.max(1200, categories.length * 80 + 300);
             const chartWidth = chartHeight * 21 / 9;
-            // Cria o canvas temporário
+            
             const offscreenCanvas = document.createElement('canvas');
             offscreenCanvas.width = chartWidth;
             offscreenCanvas.height = chartHeight;
@@ -1118,21 +1367,15 @@
             document.body.appendChild(offscreenCanvas);
             
             const ctx = offscreenCanvas.getContext('2d');
-            
-            // Define um fundo branco para o PDF
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, chartWidth, chartHeight);
 
-            // Altera as opções de animação para que possamos capturar a imagem no final
+            // Gerar PDF no 'onComplete'
             chartConfig.options.animation = {
                 onComplete: () => {
                     try {
-                        const imgData = offscreenCanvas.toDataURL('image/png');
+                        const imgData = offscreenCanvas.toDataURL('image/svg');
                         
-                        // Inicializa jsPDF
-                        // 'l' = landscape (paisagem)
-                        // 'px' = unidades em pixels
-                        // [width, height] = tamanho da página
                         const { jsPDF } = window.jspdf;
                         const pdf = new jsPDF({
                             orientation: 'l',
@@ -1140,27 +1383,21 @@
                             format: [chartWidth, chartHeight]
                         });
                         
-                        // Adiciona a imagem ao PDF
-                        pdf.addImage(imgData, 'PNG', 0, 0, chartWidth, chartHeight);
-                        
-                        // Salva o arquivo
+                        pdf.addImage(imgData, 'SVG', 0, 0, chartWidth, chartHeight);
                         pdf.save('Gantt_Projeto.pdf');
                         
                     } catch (e) {
                         console.error("Erro ao gerar o PDF:", e);
                         alert("Erro ao gerar o PDF. Verifique o console.");
                     } finally {
-                        // Limpa o canvas temporário
                         document.body.removeChild(offscreenCanvas);
                     }
                 }
             };
 
-            // Desenha o gráfico
             new Chart(ctx, chartConfig);
         }
 
-        // 4. Conectar o botão
         document.getElementById('export-gantt-pdf-btn').addEventListener('click', exportGanttToPdf);
 
         // --- Inicialização ---
@@ -1170,3 +1407,4 @@
     </script>
 </body>
 </html>
+
