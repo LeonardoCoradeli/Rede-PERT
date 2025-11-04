@@ -7,8 +7,17 @@
     <!-- 1. Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- 2. Bibliotecas de Exportação -->
+    <!-- 2. Bibliotecas de Exportação (FileSaver já estava) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <!-- 3. NOVAS Bibliotecas para Gantt PDF -->
+    <!-- jsPDF para criar o PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- Chart.js para desenhar o gráfico -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- date-fns e o adapter para Chart.js lidar com datas -->
+    <script src="https://cdn.jsdelivr.net/npm/date-fns/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 
     <style id="pert-svg-styles">
         /* Estilos customizados para o SVG */
@@ -16,9 +25,7 @@
         .node {
             transition: all 0.2s ease;
             stroke-width: 2px;
-            /* Cor padrão movida para o render() para permitir seleção */
         }
-        /* MUDANÇA: Estilo para nós selecionados */
         .node.selected {
             fill: #ebf8ff; /* Azul claro */
             stroke: #2b6cb0; /* Azul escuro */
@@ -47,7 +54,7 @@
             fill: #2d3748;
             pointer-events: none;
             user-select: none;
-            text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff; /* Sombra mais forte */
+            text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
         }
         .start-node {
             fill: #c6f6d5; /* Verde */
@@ -67,7 +74,6 @@
         }
         .node:hover {
             transform: scale(1.1);
-            /* A cor de hover agora é gerenciada pela seleção */
         }
     </style>
 </head>
@@ -99,6 +105,13 @@
         <!-- Ações de Cálculo -->
         <fieldset class="border-t pt-3">
             <legend class="text-sm font-semibold text-gray-600">Calcular</legend>
+            
+            <!-- NOVO: Input de Data de Início -->
+            <div class="mt-2">
+                <label for="start-date-input" class="block text-sm font-medium text-gray-700">Data de Início</label>
+                <input type="date" id="start-date-input" value="2025-08-04" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+            </div>
+
             <div class="grid grid-cols-2 gap-2 mt-2">
                 <button id="set-start-btn" class="p-2 bg-indigo-500 text-white rounded-lg shadow hover:bg-indigo-600 transition">Definir Início</button>
                 <button id="set-end-btn" class="p-2 bg-purple-500 text-white rounded-lg shadow hover:bg-purple-600 transition">Definir Fim</button>
@@ -116,11 +129,13 @@
             </div>
         </fieldset>
         
-        <!-- Exportar Imagem -->
+        <!-- Exportar Imagem / PDF -->
         <fieldset class="border-t pt-3">
             <legend class="text-sm font-semibold text-gray-600">Exportar Imagem</legend>
             <div class="grid grid-cols-1 gap-2 mt-2">
                 <button id="export-svg-btn" class="p-2 bg-teal-500 text-white rounded-lg shadow hover:bg-teal-600 transition">Exportar SVG</button>
+                <!-- NOVO: Botão Exportar Gantt PDF -->
+                <button id="export-gantt-pdf-btn" class="p-2 bg-cyan-600 text-white rounded-lg shadow hover:bg-cyan-700 transition">Exportar Gantt (PDF)</button>
             </div>
         </fieldset>
     </div>
@@ -155,7 +170,7 @@
         </div>
     </div>
 
-    <!-- Modal para Adicionar Tarefa -->
+    <!-- Modal para Adicionar Tarefa (Oculto) -->
     <div id="task-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center hidden">
         <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm">
             <h3 class="text-lg font-bold mb-4">Adicionar Tarefa</h3>
@@ -186,16 +201,19 @@
         const taskNameInput = document.getElementById('task-name');
         const taskTimeInput = document.getElementById('task-time');
         const fileInput = document.getElementById('file-input');
+        // NOVO: Input de data
+        const startDateInput = document.getElementById('start-date-input');
 
         const NODE_RADIUS = 25;
 
         // --- Estado da Aplicação ---
+        // (nodes, tasks, etc. são acessíveis globalmente dentro deste módulo)
         let nodes = []; // { id, x, y, text, es (cedo), ls (tarde) }
         let tasks = []; // { id, from, to, name, time, slack, isCritical }
         let nextNodeId = 1;
         let nextTaskId = 1;
 
-        let currentMode = 'view'; // 'add-node', 'add-task-start', 'add-task-end', 'set-start', 'set-end'
+        let currentMode = 'view'; // 'add-node', 'add-task-start', ...
         let tempTaskStartNodeId = null;
         let startNodeId = null;
         let endNodeId = null;
@@ -203,17 +221,15 @@
         let isDragging = false;
         let draggedNodeId = null;
         
-        // MUDANÇA: Variáveis para seleção múltipla
         let selectedNodeIds = new Set();
-        let isSelecting = false; // Desenhando caixa de seleção
+        let isSelecting = false; 
         let selectionBoxStart = { x: 0, y: 0 };
         let selectionBoxElement = null;
         
         let dragStartPoint = { x: 0, y: 0 };
         let originalNodePositions = new Map();
-        let didDrag = false; // Para diferenciar 'drag' de 'click'
+        let didDrag = false; 
 
-        // MUDANÇA: Variáveis para Pan (arrastar) e Zoom
         let viewTransform = {
             scale: 1,
             translateX: 0,
@@ -223,32 +239,26 @@
         let panStartPoint = { x: 0, y: 0 };
 
 
-        // --- Funções de Renderização ---
-
+        // --- Funções de Renderização (seu código original) ---
         function render() {
-            // Limpa o SVG, mas mantém as <defs>
             while (svg.lastChild && svg.lastChild.tagName !== 'defs') {
                 svg.removeChild(svg.lastChild);
             }
 
-            // MUDANÇA: Cria um grupo <g> que conterá todos os elementos
-            // Isso permite aplicar Pan e Zoom a tudo de uma vez
             const viewportGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             viewportGroup.setAttribute('id', 'viewport-group');
             viewportGroup.setAttribute('transform', `translate(${viewTransform.translateX}, ${viewTransform.translateY}) scale(${viewTransform.scale})`);
             svg.appendChild(viewportGroup);
 
-            // Renderiza Tarefas (Setas) - primeiro para ficarem por baixo
             tasks.forEach(task => {
                 const fromNode = nodes.find(n => n.id === task.from);
                 const toNode = nodes.find(n => n.id === task.to);
                 if (!fromNode || !toNode) return;
 
-                // MUDANÇA: Ajuste para a linha parar na borda do círculo
                 const dx = toNode.x - fromNode.x;
                 const dy = toNode.y - fromNode.y;
                 const dist = Math.sqrt(dx*dx + dy*dy);
-                if (dist === 0) return; // Evita divisão por zero
+                if (dist === 0) return; 
 
                 const ratio = (dist - NODE_RADIUS) / dist;
                 const targetX = fromNode.x + dx * ratio;
@@ -257,8 +267,8 @@
                 const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
                 line.setAttribute('x1', fromNode.x);
                 line.setAttribute('y1', fromNode.y);
-                line.setAttribute('x2', targetX); // MUDANÇA
-                line.setAttribute('y2', targetY); // MUDANÇA
+                line.setAttribute('x2', targetX); 
+                line.setAttribute('y2', targetY); 
                 line.classList.add('task-line');
                 
                 if (task.isCritical) {
@@ -267,24 +277,20 @@
                 } else {
                     line.setAttribute('marker-end', 'url(#arrowhead)');
                 }
+                viewportGroup.appendChild(line);
 
-                viewportGroup.appendChild(line); // MUDANÇA: Adiciona ao viewportGroup
-
-                // Texto da Tarefa
                 const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
                 const midX = (fromNode.x + toNode.x) / 2;
                 const midY = (fromNode.y + toNode.y) / 2;
                 text.setAttribute('x', midX);
-                // MUDANÇA: Alinhamento central
                 text.setAttribute('y', midY);
                 text.setAttribute('text-anchor', 'middle');
-                text.setAttribute('dy', '0.3em'); // Ajuste vertical
+                text.setAttribute('dy', '0.3em'); 
                 text.classList.add('task-text');
                 text.textContent = `${task.name} (${task.time})`;
-                viewportGroup.appendChild(text); // MUDANÇA: Adiciona ao viewportGroup
+                viewportGroup.appendChild(text);
             });
 
-            // Renderiza Eventos (Nós)
             nodes.forEach(node => {
                 const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
                 group.setAttribute('transform', `translate(${node.x}, ${node.y})`);
@@ -294,8 +300,7 @@
                 circle.setAttribute('r', NODE_RADIUS);
                 circle.classList.add('node');
                 
-                // MUDANÇA: Lógica de classes para estilo
-                circle.style.fill = ''; // Reseta estilos inline
+                circle.style.fill = ''; 
                 circle.style.stroke = '';
                 
                 if (node.id === startNodeId) circle.classList.add('start-node');
@@ -303,50 +308,41 @@
                 if (node.isCritical) circle.classList.add('critical-path-node');
                 if (selectedNodeIds.has(node.id)) circle.classList.add('selected');
                 
-                // Aplica cor padrão se nenhuma classe de cor especial se aplicar
                 if (node.id !== startNodeId && node.id !== endNodeId && !selectedNodeIds.has(node.id)) {
                     circle.style.fill = '#e2e8f0';
                     circle.style.stroke = '#718096';
                 }
-
                 group.appendChild(circle);
 
-                // Texto do ID do Nó
                 const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
                 text.setAttribute('text-anchor', 'middle');
-                text.setAttribute('dy', '0.3em'); // Centraliza verticalmente
+                text.setAttribute('dy', '0.3em'); 
                 text.classList.add('node-text');
                 text.textContent = node.text;
                 group.appendChild(text);
 
-                // Texto ES (Cedo) e LS (Tarde)
                 const eslsText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
                 eslsText.setAttribute('text-anchor', 'middle');
-                eslsText.setAttribute('y', -NODE_RADIUS - 5); // Acima do nó
+                eslsText.setAttribute('y', -NODE_RADIUS - 5); 
                 eslsText.classList.add('node-es-ls-text');
                 
-                // MUDANÇA: Inverte Ls/Es e adiciona Folga
                 const esText = node.es | 0;
                 const lsText = node.ls === Infinity ? 'Inf' : (node.ls | 0);
                 let slackText = 'Inf';
                 if (node.ls !== Infinity && node.es !== Infinity) {
-                    // Arredonda a folga para evitar problemas de float (ex: 5.99999)
                     const slack = Math.round(node.ls - node.es);
                     slackText = slack;
                 }
                 eslsText.textContent = `[${lsText} | ${esText}] = ${slackText}`;
                 
                 group.appendChild(eslsText);
-
-                viewportGroup.appendChild(group); // MUDANÇA: Adiciona ao viewportGroup
+                viewportGroup.appendChild(group);
             });
         }
 
-        // --- Funções de Lógica de UI ---
-
+        // --- Funções de Lógica de UI (seu código original) ---
         function setMode(newMode) {
             currentMode = newMode;
-            // MUDANÇA: Desseleciona tudo ao trocar de modo
             if (newMode !== 'view') {
                 selectedNodeIds.clear();
                 render();
@@ -354,7 +350,6 @@
             
             switch (newMode) {
                 case 'view':
-                    // MUDANÇA: Atualiza texto de status para incluir Pan
                     statusText.textContent = 'Visualizando (Shift+Click: Seleção, Alt+Drag: Mover)';
                     statusText.className = 'font-medium text-gray-700';
                     svg.style.cursor = 'grab';
@@ -386,24 +381,20 @@
                     break;
             }
         }
-
         function showTaskModal() {
             taskModal.classList.remove('hidden');
             taskNameInput.focus();
         }
-
         function hideTaskModal() {
             taskModal.classList.add('hidden');
             taskForm.reset();
         }
-
         function getClickedNodeId(target) {
             let el = target;
             while (el && el !== svg) {
                 if (el.tagName === 'g' && el.dataset.id) {
                     return parseInt(el.dataset.id);
                 }
-                // Se clicou no círculo ou texto dentro do 'g'
                 if ((el.tagName === 'circle' || el.tagName === 'text') && el.parentElement.tagName === 'g' && el.parentElement.dataset.id) {
                     return parseInt(el.parentElement.dataset.id);
                 }
@@ -411,24 +402,17 @@
             }
             return null;
         }
-
-        // MUDANÇA: Função para excluir nó
         function deleteNode(nodeId) {
             nodes = nodes.filter(n => n.id !== nodeId);
-            // Deleta tarefas conectadas
             tasks = tasks.filter(t => t.from !== nodeId && t.to !== nodeId);
-            
             if (startNodeId === nodeId) startNodeId = null;
             if (endNodeId === nodeId) endNodeId = null;
             selectedNodeIds.delete(nodeId);
-            
             console.log(`Nó ${nodeId} excluído.`);
             render();
         }
 
-        // --- Handlers de Eventos ---
-
-        // Handlers dos Botões
+        // --- Handlers de Eventos (seu código original) ---
         document.getElementById('add-node-btn').addEventListener('click', () => setMode('add-node'));
         document.getElementById('add-task-btn').addEventListener('click', () => setMode('add-task-start'));
         document.getElementById('view-mode-btn').addEventListener('click', () => setMode('view'));
@@ -453,104 +437,73 @@
             }
         });
 
-        // MUDANÇA: Handlers do SVG (Mouse) - Lógica de Drag/Seleção
-        
         svg.addEventListener('mousedown', (e) => {
-            // Ignora botões que não são o principal (ex: direito, do meio)
             if (e.button !== 0) return; 
-
-            didDrag = false; // Reseta o flag de 'drag'
+            didDrag = false; 
             const nodeId = getClickedNodeId(e.target);
             const svgPoint = getSVGPoint(e.clientX, e.clientY);
             
             if (nodeId) {
-                // MUDANÇA: A lógica de DRAG só acontece no modo 'view'
                 if (currentMode === 'view') {
-                    // Clicou num nó
-                    isDragging = true; // SÓ ATIVA DRAG EM VIEW
-                    draggedNodeId = nodeId; // Nó principal
+                    isDragging = true; 
+                    draggedNodeId = nodeId; 
                     dragStartPoint = svgPoint;
-                
-                    // Lógica de Seleção Múltipla (Apenas no modo 'view')
+                    
                     if (!e.shiftKey) {
                         if (!selectedNodeIds.has(nodeId)) {
-                            // Se clicar em um nó não selecionado (sem shift), limpa seleção e seleciona este
                             selectedNodeIds.clear();
                             selectedNodeIds.add(nodeId);
                         }
-                        // Se clicou em nó já selecionado, não faz nada (prepara para arrastar o grupo)
                     } else {
-                        // Com Shift, alterna a seleção
                         if (selectedNodeIds.has(nodeId)) {
                             selectedNodeIds.delete(nodeId);
                         } else {
                             selectedNodeIds.add(nodeId);
                         }
                     }
-
-                    // Armazena posições originais para o drag
                     originalNodePositions.clear();
-                    
-                    // Define quais nós arrastar: (todos os que estão selecionados AGORA)
                     let idsToDrag = selectedNodeIds; 
-                    
                     for (const id of idsToDrag) {
                         const n = nodes.find(n => n.id === id);
                         if(n) originalNodePositions.set(id, { x: n.x, y: n.y });
                     }
-                    
                     svg.style.cursor = 'grabbing';
-                    render(); // Atualiza visualização da seleção
-
+                    render();
                 } else {
-                    // Em outros modos (add-task, etc.), um clique no nó des-seleciona tudo
-                    // MAS NÃO INICIA O DRAG
-                    
-                    // MUDANÇA: Só renderiza se for necessário limpar a seleção
                     if (selectedNodeIds.size > 0) {
                         selectedNodeIds.clear();
                         render();
                     }
                 }
-
             } else if (currentMode === 'view') {
-                // MUDANÇA: Verifica se é Pan (Alt+Click) ou Seleção
                 if (e.altKey) {
-                    // Inicia o Pan
                     isPanning = true;
                     panStartPoint = { x: e.clientX, y: e.clientY };
                     svg.style.cursor = 'move';
                 } else {
-                    // Clicou no vazio (inicia selection box), SÓ no modo 'view'
-                    // MUDANÇA: Adiciona chaves { } faltando
                     isSelecting = true;
                     selectionBoxStart = svgPoint;
                     selectionBoxElement = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                    
-                    // Adiciona estilos ao box (para que seja visível)
                     selectionBoxElement.setAttribute('fill', 'rgba(43, 108, 176, 0.2)');
                     selectionBoxElement.setAttribute('stroke', 'rgba(43, 108, 176, 0.5)');
                     selectionBoxElement.setAttribute('stroke-width', '1');
-                    
                     svg.appendChild(selectionBoxElement);
                     
                     if (!e.shiftKey) {
                         selectedNodeIds.clear();
                         render();
                     }
-                } // MUDANÇA: Fecha o bloco 'else'
+                }
             }
-            // Se clicou no vazio e não está em 'view' mode, o 'click' handler vai cuidar (ex: 'add-node')
         });
         
         svg.addEventListener('mousemove', (e) => {
             if (isDragging) {
-                didDrag = true; // Marcou que um 'drag' ocorreu
+                didDrag = true; 
                 const svgPoint = getSVGPoint(e.clientX, e.clientY);
                 const dx = svgPoint.x - dragStartPoint.x;
                 const dy = svgPoint.y - dragStartPoint.y;
                 
-                // Move todos os nós que estavam selecionados no mousedown
                 for (const [id, originalPos] of originalNodePositions.entries()) {
                     const node = nodes.find(n => n.id === id);
                     if (node) {
@@ -559,24 +512,19 @@
                     }
                 }
                 render();
-            // MUDANÇA: Lógica de Pan (Arrastar)
             } else if (isPanning) {
                 didDrag = true;
                 const dx = e.clientX - panStartPoint.x;
                 const dy = e.clientY - panStartPoint.y;
-                
                 viewTransform.translateX += dx;
                 viewTransform.translateY += dy;
-                
-                panStartPoint = { x: e.clientX, y: e.clientY }; // Atualiza ponto inicial para próximo movimento
-                
-                // Re-aplica o transform
+                panStartPoint = { x: e.clientX, y: e.clientY }; 
                 const viewportGroup = document.getElementById('viewport-group');
                 if(viewportGroup) {
                     viewportGroup.setAttribute('transform', `translate(${viewTransform.translateX}, ${viewTransform.translateY}) scale(${viewTransform.scale})`);
                 }
             } else if (isSelecting) {
-                didDrag = true; // Desenhar um box também conta como 'drag'
+                didDrag = true; 
                 const svgPoint = getSVGPoint(e.clientX, e.clientY);
                 const x = Math.min(selectionBoxStart.x, svgPoint.x);
                 const y = Math.min(selectionBoxStart.y, svgPoint.y);
@@ -594,21 +542,18 @@
                 isDragging = false;
                 draggedNodeId = null;
                 originalNodePositions.clear();
-                setMode(currentMode); // Reseta o cursor (ex: de 'grabbing' para 'grab')
-            // MUDANÇA: Reseta o Pan
+                setMode(currentMode);
             } else if (isPanning) {
                 isPanning = false;
-                setMode('view'); // Reseta o cursor para 'grab'
+                setMode('view'); 
             } else if (isSelecting) {
                 isSelecting = false;
-                // Finaliza a seleção do box
                 const x = parseFloat(selectionBoxElement.getAttribute('x'));
                 const y = parseFloat(selectionBoxElement.getAttribute('y'));
                 const width = parseFloat(selectionBoxElement.getAttribute('width'));
                 const height = parseFloat(selectionBoxElement.getAttribute('height'));
                 
                 nodes.forEach(node => {
-                    // Seleciona se o CENTRO do nó está no box
                     if (node.x > x && node.x < (x + width) && node.y > y && node.y < (y + height)) {
                         selectedNodeIds.add(node.id);
                     }
@@ -616,13 +561,12 @@
                 
                 selectionBoxElement.remove();
                 selectionBoxElement = null;
-                render(); // Mostra a nova seleção
+                render(); 
             }
         });
 
-        // MUDANÇA: Adicionado listener de clique direito
         svg.addEventListener('contextmenu', (e) => {
-            e.preventDefault(); // Impede o menu do navegador
+            e.preventDefault(); 
             const nodeId = getClickedNodeId(e.target);
             if (nodeId) {
                 deleteNode(nodeId);
@@ -630,15 +574,12 @@
         });
 
         svg.addEventListener('click', (e) => {
-            // MUDANÇA: Ignora 'click' se um 'drag' acabou de acontecer
             if (didDrag) {
                 didDrag = false; 
                 return;
             }
-
             const svgPoint = getSVGPoint(e.clientX, e.clientY);
             const clickedNodeId = getClickedNodeId(e.target);
-
             switch (currentMode) {
                 case 'add-node':
                     if (clickedNodeId) return; 
@@ -654,14 +595,12 @@
                     nextNodeId++;
                     render();
                     break;
-                
                 case 'add-task-start':
                     if (clickedNodeId) {
                         tempTaskStartNodeId = clickedNodeId;
                         setMode('add-task-end');
                     }
                     break;
-
                 case 'add-task-end':
                     if (clickedNodeId && clickedNodeId !== tempTaskStartNodeId) {
                         taskForm.dataset.from = tempTaskStartNodeId;
@@ -672,7 +611,6 @@
                     }
                     tempTaskStartNodeId = null;
                     break;
-                
                 case 'set-start':
                     if (clickedNodeId) {
                         startNodeId = clickedNodeId;
@@ -682,7 +620,6 @@
                         setMode('view');
                     }
                     break;
-
                 case 'set-end':
                     if (clickedNodeId) {
                         endNodeId = clickedNodeId;
@@ -692,9 +629,7 @@
                         setMode('view');
                     }
                     break;
-                
                 case 'view':
-                    // MUDANÇA: Clicar no vazio no modo 'view' agora des-seleciona tudo
                     if (!clickedNodeId && !e.shiftKey) {
                         selectedNodeIds.clear();
                         render();
@@ -703,7 +638,6 @@
             }
         });
 
-        // Handlers do Modal
         taskForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const from = parseInt(taskForm.dataset.from);
@@ -732,59 +666,47 @@
             setMode('add-task-start');
         });
         
-        // MUDANÇA: getSVGPoint agora precisa considerar o Pan/Zoom (viewportGroup)
         function getSVGPoint(clientX, clientY) {
             const viewportGroup = document.getElementById('viewport-group');
             const pt = svg.createSVGPoint();
             pt.x = clientX;
             pt.y = clientY;
-
             if (!viewportGroup) {
-                // Fallback se o viewport-group ainda não foi renderizado
                 return pt.matrixTransform(svg.getScreenCTM().inverse());
             }
-            // Converte ponto da tela para o sistema de coordenadas do viewportGroup (mundo)
-            // Isso agora contabiliza o <g> transform
             return pt.matrixTransform(viewportGroup.getScreenCTM().inverse());
         }
 
-        // MUDANÇA: Adiciona listener para Zoom (roda do mouse)
         svg.addEventListener('wheel', (e) => {
-            e.preventDefault(); // Impede o scroll da página
-            if (currentMode !== 'view') return; // Zoom só no modo 'view'
+            e.preventDefault(); 
+            if (currentMode !== 'view') return; 
 
             const viewportGroup = document.getElementById('viewport-group');
             if (!viewportGroup) return;
 
-            const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1; // 0.9 = zoom out, 1.1 = zoom in
+            const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1; 
             const oldScale = viewTransform.scale;
             
-            viewTransform.scale = Math.max(0.1, Math.min(5, viewTransform.scale * zoomFactor)); // Limita o zoom
+            viewTransform.scale = Math.max(0.1, Math.min(5, viewTransform.scale * zoomFactor)); 
             
-            // Pega o ponto do mouse relativo ao "mundo" (dentro do <g>)
             const worldPoint = getSVGPoint(e.clientX, e.clientY);
 
-            // Calcula o novo translate para que o zoom seja "em direção ao mouse"
-            // Esta é a fórmula padrão de zoom-to-point
             viewTransform.translateX = worldPoint.x - (worldPoint.x - viewTransform.translateX) * (viewTransform.scale / oldScale);
             viewTransform.translateY = worldPoint.y - (worldPoint.y - viewTransform.translateY) * (viewTransform.scale / oldScale);
             
             viewportGroup.setAttribute('transform', `translate(${viewTransform.translateX}, ${viewTransform.translateY}) scale(${viewTransform.scale})`);
         });
 
-
-        // --- Lógica de Cálculo (CPM) ---
-
+        // --- Lógica de Cálculo (CPM) (seu código original) ---
         function calculatePaths() {
             if (!startNodeId || !endNodeId) {
                 console.error("Por favor, defina um nó de INÍCIO e um nó de FIM antes de calcular.");
                 return false;
             }
 
-            // Reseta os cálculos
             nodes.forEach(n => {
                 n.es = 0;
-                n.ls = Infinity; // Inicia LS como infinito (exceto para o fim)
+                n.ls = Infinity; 
                 n.isCritical = false;
             });
             tasks.forEach(t => t.isCritical = false);
@@ -800,8 +722,16 @@
             
             let processQueue = [startNode];
             let visitedCount = 0;
-
+            let safetyCheck = 0;
+            
             while(processQueue.length > 0) {
+                 // Proteção contra loops infinitos em grafos cíclicos
+                safetyCheck++;
+                if (safetyCheck > nodes.length * nodes.length) {
+                    console.warn("Aviso: Cálculo interrompido, possível ciclo detectado.");
+                    break;
+                }
+                
                 const u = processQueue.shift();
                 visitedCount++;
                 
@@ -809,7 +739,7 @@
                 
                 for(const task of outgoingTasks) {
                     const v = nodes.find(n => n.id === task.to);
-                    if (!v) continue; // Nó de destino pode ter sido excluído
+                    if (!v) continue; 
                     
                     const newES = u.es + task.time;
                     
@@ -823,27 +753,15 @@
                     }
                 }
             }
-
-            if (visitedCount < nodes.length) {
-                // Tenta encontrar nós não visitados (exclui nós desconectados do início)
-                const unvisitedNodes = nodes.filter(n => nodePredecessors[n.id] > 0);
-                if (unvisitedNodes.length > 0 && nodes.some(n => n.es === 0 && n.id !== startNodeId)) {
-                     console.warn("Aviso: Ciclo detectado ou alguns nós são inalcançáveis a partir do início.");
-                     // Não retorna 'false' necessariamente, mas o cálculo pode estar incorreto
-                }
-            }
-
+            
             // --- 2. Backward Pass (Cálculo do Tempo Tarde - LS) ---
             const projectDuration = endNode.es;
-            endNode.ls = projectDuration;
             
-            // Reseta LS para nós inalcançáveis (define como a duração do projeto)
+            // Define LS de todos os nós como a duração total
+            // Isso lida com nós inalcançáveis ou desconectados
             nodes.forEach(n => {
-                if(n.es === 0 && n.id !== startNodeId) {
-                    n.ls = projectDuration;
-                }
+                n.ls = projectDuration;
             });
-            endNode.ls = projectDuration; // Garante
 
             // Recalcula sucessores para o backward pass
             let nodeSuccessorsCount = {};
@@ -852,8 +770,16 @@
             });
 
             processQueue = [endNode];
+            safetyCheck = 0;
             
             while(processQueue.length > 0) {
+                 // Proteção contra loops
+                safetyCheck++;
+                if (safetyCheck > nodes.length * nodes.length) {
+                    console.warn("Aviso: Cálculo (backward) interrompido, possível ciclo detectado.");
+                    break;
+                }
+
                 const v = processQueue.shift();
                 
                 const incomingTasks = tasks.filter(t => t.to === v.id);
@@ -869,43 +795,22 @@
                     }
                     
                     nodeSuccessorsCount[u.id]--;
-                    if(nodeSuccessorsCount[u.id] === 0 && u.id !== startNodeId) {
-                        processQueue.push(u);
-                    }
-                    // Garante que o nó inicial seja processado no final
-                    if (u.id === startNodeId && nodeSuccessorsCount[u.id] === 0) {
-                         if (!processQueue.includes(startNode)) {
-                             processQueue.push(startNode);
+                    // Só adiciona à fila se todos os caminhos sucessores tiverem sido processados
+                    if(nodeSuccessorsCount[u.id] === 0) {
+                         if (!processQueue.includes(u)) { // Evita duplicatas
+                            processQueue.push(u);
                          }
                     }
                 }
             }
-             // Caso especial: se o nó inicial não foi processado (ex: grafo simples A->B)
-            if (startNode.ls === Infinity) {
-                const taskToStart = tasks.find(t => t.to === startNodeId);
-                if (!taskToStart) { // É o nó inicial real
-                    const outgoing = tasks.filter(t => t.from === startNodeId);
-                    let minLs = Infinity;
-                    outgoing.forEach(t => {
-                        const nextNode = nodes.find(n => n.id === t.to);
-                        if(nextNode) minLs = Math.min(minLs, nextNode.ls - t.time);
-                    });
-                    startNode.ls = (minLs === Infinity) ? 0 : minLs;
-                }
-            }
             
             // --- 3. Calcular Folga (Slack) e Caminho Crítico ---
-            const tolerance = 1e-5; // Tolerância para comparação de floats
+            const tolerance = 1e-5; 
             
             nodes.forEach(n => {
                 const slack = n.ls - n.es;
-                if (Math.abs(slack) < tolerance && n.es > 0) { // Nó crítico (e alcançável)
-                    n.isCritical = true;
-                }
-                if (n.id === startNodeId && Math.abs(slack) < tolerance) {
-                     n.isCritical = true;
-                }
-                if (n.id === endNodeId) { // Nó final é sempre crítico
+                // Um nó é crítico se sua folga é (próxima de) zero
+                if (Math.abs(slack) < tolerance) {
                     n.isCritical = true;
                 }
             });
@@ -919,6 +824,7 @@
                 const slack = toNode.ls - fromNode.es - task.time;
                 task.slack = slack;
                 
+                // Tarefa é crítica se sua folga é zero E conecta nós críticos
                 if (Math.abs(slack) < tolerance && fromNode.isCritical && toNode.isCritical) {
                     task.isCritical = true;
                 }
@@ -927,10 +833,7 @@
             return true;
         }
 
-
-        // --- Funções de Import/Export ---
-        // (O código de Import/Export existente é mantido aqui)
-
+        // --- Funções de Import/Export (seu código original) ---
         // JSON
         document.getElementById('export-json-btn').addEventListener('click', () => {
             const data = {
@@ -952,7 +855,6 @@
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
             const reader = new FileReader();
             reader.onload = (event) => {
                 try {
@@ -963,7 +865,9 @@
                     nextTaskId = data.nextTaskId || 1;
                     startNodeId = data.startNodeId || null;
                     endNodeId = data.endNodeId || null;
-                    selectedNodeIds.clear(); // Limpa seleção ao importar
+                    selectedNodeIds.clear();
+                    // Limpa transformações de pan/zoom
+                    viewTransform = { scale: 1, translateX: 0, translateY: 0 };
                     render();
                     setMode('view');
                 } catch (err) {
@@ -971,41 +875,51 @@
                 }
             };
             reader.readAsText(file);
-            fileInput.value = null; // Reseta o input
+            fileInput.value = null;
         });
 
-        // --- Lógica de Exportação de SVG (Com Estilos) ---
-        
-        // Função auxiliar para copiar estilos
+        // SVG
         function getClonedSvgWithStyles() {
             const clonedSvg = svg.cloneNode(true);
-            clonedSvg.setAttribute('width', svg.clientWidth);
-            clonedSvg.setAttribute('height', svg.clientHeight);
-
-            const styleDef = document.createElementNS('http://www.w3.org/2000/svg', 'style');
             
-            // 1. Pega os estilos da tag <style>
+            // Define o BBox (bounding box) de todo o conteúdo
+            const viewportGroup = clonedSvg.querySelector('#viewport-group');
+            let bbox = { x: 0, y: 0, width: 1000, height: 800 }; // Default
+            if (viewportGroup && viewportGroup.getBBox) {
+                 try {
+                    bbox = viewportGroup.getBBox();
+                    // Adiciona padding
+                    bbox.x -= 50;
+                    bbox.y -= 50;
+                    bbox.width += 100;
+                    bbox.height += 100;
+                 } catch(e) {
+                    console.warn("Não foi possível calcular o BBox do SVG, usando tamanho padrão.", e);
+                 }
+            }
+
+            // Remove o transform do grupo para que o viewBox funcione
+            if (viewportGroup) {
+                viewportGroup.setAttribute('transform', '');
+            }
+            
+            clonedSvg.setAttribute('width', bbox.width);
+            clonedSvg.setAttribute('height', bbox.height);
+            clonedSvg.setAttribute('viewBox', `${bbox.x} ${bbox.y} ${bbox.width} ${bbox.height}`);
+            
+            const styleDef = document.createElementNS('http://www.w3.org/2000/svg', 'style');
             const styleElement = document.getElementById('pert-svg-styles');
             if (styleElement) {
                 styleDef.textContent = styleElement.innerHTML;
             }
-            
-            // 2. MUDANÇA: Adiciona manualmente a fonte, pois o SVG exportado pode perdê-la
             styleDef.textContent += `
-                svg { 
-                    font-family: 'Inter', sans-serif; 
-                }
-                .task-text {
-                    /* Garante que a sombra seja aplicada no SVG exportado */
-                    text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
-                }
+                svg { font-family: 'Inter', sans-serif; }
+                .task-text { text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff; }
             `;
-            
             clonedSvg.querySelector('defs').appendChild(styleDef);
             return clonedSvg;
         }
 
-        // SVG
         document.getElementById('export-svg-btn').addEventListener('click', () => {
             if (typeof saveAs === 'undefined') {
                 console.error("Erro: Biblioteca FileSaver.js não carregada.");
@@ -1017,6 +931,245 @@
             saveAs(blob, 'diagrama-rede.svg');
         });
 
+        // --- ============================================ ---
+        // --- NOVO CÓDIGO: EXPORTAÇÃO DE GANTT (PDF) ---
+        // --- ============================================ ---
+
+        
+        // 2. Helper para agrupar tarefas (Portado do Python)
+        function getTaskCategory(taskName) {
+            taskName = String(taskName);
+            if (taskName.includes("Diagrama de Sequência")) return "Diagrama de Sequência";
+            if (taskName.includes("Diagrama de Colaboração")) return "Diagrama de Colaboração";
+            if (taskName.includes("Diagrama de Classe")) return "Diagrama de Classe";
+            if (taskName.includes("Caso de Uso de Alto Nivel")) return "Modelagem (Caso de Uso)";
+            if (taskName.includes("Documento de Casos de Usos Expandidos")) return "Modelagem (Caso de Uso)";
+            if (taskName.includes("Modelo Conceitual")) return "Modelagem (Conceitual)";
+            if (taskName.includes("Implementação")) return "Implementação";
+            if (taskName.includes("Teste Unitário")) return "Testes (Unitários)";
+            if (taskName.toLowerCase().includes("teste de sistema")) return "Testes (Sistema)";
+            if (taskName.includes("SQA")) return "SQA (Qualidade)";
+            if (taskName.includes("Documento de Requisitos")) return "Documentação";
+            if (taskName.includes("Coleta de Requisitos")) return "Coleta de Requisitos";
+            
+            // Fallback
+            return taskName.replace(/ \(E\d+-E\d+\)/, '').replace(/ Módulo \d/, '').trim();
+        }
+
+        // 3. Função principal de exportação
+        async function exportGanttToPdf() {
+            // Verifica se os dados necessários existem
+            if (!startNodeId || nodes.length === 0 || tasks.length === 0) {
+                alert("Por favor, carregue um projeto e calcule os caminhos primeiro.");
+                return;
+            }
+            
+            // Pega a data de início do input
+            const startDateValue = startDateInput.value;
+            if (!startDateValue) {
+                alert("Por favor, defina uma Data de Início do projeto.");
+                return;
+            }
+            // new Date(string) pode ser inconsistente, então fazemos o parse manual
+            const [year, month, day] = startDateValue.split('-').map(Number);
+            const projectStartDate = new Date(year, month - 1, day);
+
+            // --- A. Processar os dados (igual ao Python) ---
+            
+            // 1. Criar mapa de consulta de 'es' (início mais cedo)
+            const nodeStartTimes = new Map(nodes.map(n => [n.id, n.es]));
+
+            // 2. Processar tarefas
+            const processedTasks = tasks.map(task => {
+                const startDaysOffset = nodeStartTimes.get(task.from);
+                const taskDuration = task.time;
+                
+                // Criar NOVAS instâncias de Date para cada tarefa
+                const startDate = new Date(projectStartDate);
+                startDate.setDate(startDate.getDate() + startDaysOffset);
+                
+                const endDate = new Date(startDate);
+                endDate.setDate(endDate.getDate() + taskDuration);
+
+                return {
+                    name: task.name,
+                    category: getTaskCategory(task.name),
+                    start: startDate,
+                    end: endDate,
+                    isCritical: task.isCritical
+                };
+            });
+
+            // 3. Criar os datasets para o Chart.js
+            const categories = [...new Set(processedTasks.map(t => t.category))];
+            
+            // Ordenar categorias pela data de início mais cedo
+            const categorySortMap = new Map();
+            categories.forEach(cat => {
+                const minStartDate = Math.min(...processedTasks.filter(t => t.category === cat).map(t => t.start.getTime()));
+                categorySortMap.set(cat, minStartDate);
+            });
+            categories.sort((a, b) => categorySortMap.get(a) - categorySortMap.get(b));
+
+            const criticalData = [];
+            const nonCriticalData = [];
+
+            processedTasks.forEach(task => {
+                const dataPoint = {
+                    x: [task.start.getTime(), task.end.getTime()], // Chart.js usa [início, fim]
+                    y: task.category, // O 'label' da categoria no eixo Y
+                    name: task.name
+                };
+                if (task.isCritical) {
+                    criticalData.push(dataPoint);
+                } else {
+                    nonCriticalData.push(dataPoint);
+                }
+            });
+            
+            // --- B. Configurar o Chart.js ---
+            const chartConfig = {
+                type: 'bar',
+                data: {
+                    labels: categories, // Eixo Y
+                    datasets: [
+                        {
+                            label: 'Não Crítico',
+                            data: nonCriticalData,
+                            backgroundColor: 'rgba(54, 162, 235, 0.7)', // Azul
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            borderWidth: 1,
+                            barPercentage: 0.6
+                        },
+                        {
+                            label: 'Crítico',
+                            data: criticalData,
+                            backgroundColor: 'rgba(255, 99, 132, 0.7)', // Vermelho
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            borderWidth: 1,
+                            barPercentage: 0.6
+                        }
+                    ]
+                },
+                options: {
+                    indexAxis: 'y', // Isso torna o gráfico de barras horizontal
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `Cronograma do Projeto (Início: ${projectStartDate.toLocaleDateString('pt-BR')})`,
+                            font: { size: 18 }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const raw = context.raw;
+                                    const taskName = raw.name || context.dataset.label;
+                                    const start = new Date(raw.x[0]).toLocaleDateString('pt-BR');
+                                    const end = new Date(raw.x[1]).toLocaleDateString('pt-BR');
+                                    return `${taskName}: ${start} - ${end}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time', // Eixo X é de tempo
+                            time: {
+                                unit: 'week', // Agrupado por semana
+                                displayFormats: {
+                                    week: 'dd-MMM-yy'
+                                }
+                            },
+                            min: projectStartDate.getTime(), // Início do gráfico
+                            title: {
+                                display: true,
+                                text: 'Datas (Início da Semana)'
+                            },
+                            grid: {
+                                display: true
+                            }
+                        },
+                        y: {
+                            stacked: true, // Agrupa as categorias
+                            title: {
+                                display: true,
+                                text: 'Categorias de Tarefa'
+                            },
+                            grid: {
+                                display: false
+                            }
+                        }
+                    }
+                }
+            };
+            
+            // --- C. Desenhar em Canvas Off-screen e Exportar para PDF ---
+            
+            // Define o tamanho (Paisagem) - 16:9
+            const chartWidth = 1600;
+            // Altura dinâmica baseada no número de categorias
+            const chartHeight = Math.max(600, categories.length * 40 + 150); // 40px por categoria + 150px para eixos/título
+
+            // Cria o canvas temporário
+            const offscreenCanvas = document.createElement('canvas');
+            offscreenCanvas.width = chartWidth;
+            offscreenCanvas.height = chartHeight;
+            offscreenCanvas.style.display = 'none';
+            document.body.appendChild(offscreenCanvas);
+            
+            const ctx = offscreenCanvas.getContext('2d');
+            
+            // Define um fundo branco para o PDF
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, chartWidth, chartHeight);
+
+            // Altera as opções de animação para que possamos capturar a imagem no final
+            chartConfig.options.animation = {
+                onComplete: () => {
+                    try {
+                        const imgData = offscreenCanvas.toDataURL('image/png');
+                        
+                        // Inicializa jsPDF
+                        // 'l' = landscape (paisagem)
+                        // 'px' = unidades em pixels
+                        // [width, height] = tamanho da página
+                        const { jsPDF } = window.jspdf;
+                        const pdf = new jsPDF({
+                            orientation: 'l',
+                            unit: 'px',
+                            format: [chartWidth, chartHeight]
+                        });
+                        
+                        // Adiciona a imagem ao PDF
+                        pdf.addImage(imgData, 'PNG', 0, 0, chartWidth, chartHeight);
+                        
+                        // Salva o arquivo
+                        pdf.save('Gantt_Projeto.pdf');
+                        
+                    } catch (e) {
+                        console.error("Erro ao gerar o PDF:", e);
+                        alert("Erro ao gerar o PDF. Verifique o console.");
+                    } finally {
+                        // Limpa o canvas temporário
+                        document.body.removeChild(offscreenCanvas);
+                    }
+                }
+            };
+
+            // Desenha o gráfico
+            new Chart(ctx, chartConfig);
+        }
+
+        // 4. Conectar o botão
+        document.getElementById('export-gantt-pdf-btn').addEventListener('click', exportGanttToPdf);
+
+        // --- ================================== ---
+        // --- FIM DO NOVO CÓDIGO DE GANTT ---
+        // --- ================================== ---
+
+
         // --- Inicialização ---
         setMode('view');
         render();
@@ -1024,8 +1177,3 @@
     </script>
 </body>
 </html>
-
-
-
-
-
